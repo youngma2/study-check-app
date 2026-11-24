@@ -36,18 +36,25 @@
 
 -- ----------------------------------------------------------------------------
 -- 0. 확장 — PIN 해시용 pgcrypto (bcrypt)
+--    (extensions 스키마는 Supabase 에 이미 있습니다. 스키마를 새로 만들지 않습니다.)
 -- ----------------------------------------------------------------------------
-
-create schema if not exists extensions;
 
 do $$
 begin
   -- Supabase 는 보통 extensions 스키마에 이미 들어 있습니다(그러면 그냥 넘어갑니다).
-  create extension if not exists pgcrypto with schema extensions;
-exception
-  when others then
-    -- 로컬 테스트용 PostgreSQL 에 pgcrypto 가 없어도 나머지 스키마는 그대로 만듭니다.
-    raise notice 'pgcrypto 확장을 설치하지 못했습니다: %', sqlerrm;
+  -- (스키마 생성 권한이 없는 환경도 있어 `create schema` 는 시도하지 않습니다.)
+  begin
+    create extension if not exists pgcrypto with schema extensions;
+  exception
+    when others then
+      begin
+        create extension if not exists pgcrypto;
+      exception
+        when others then
+          -- 로컬 테스트용 PostgreSQL 에 pgcrypto 가 없어도 나머지 스키마는 그대로 만듭니다.
+          raise notice 'pgcrypto 확장을 설치하지 못했습니다: %', sqlerrm;
+      end;
+  end;
 end;
 $$;
 
