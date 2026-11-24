@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { RemoteEvent, StorageAdapter, StorageChange, StorageKind } from './storage';
-import type { Family, Member, MemberColor, Role, StudyDB, Task, TaskPreset, TaskStatus } from './types';
+import type { Family, FamilyNote, Member, MemberColor, Role, StudyDB, Task, TaskPreset, TaskStatus } from './types';
 
 /**
  * Supabase 연결 (가족 실시간 동기화).
@@ -80,6 +80,14 @@ interface MemberRow {
   created_at: string;
 }
 
+interface FamilyNoteRow {
+  id: string;
+  family_id: string;
+  author_id: string;
+  content: string;
+  created_at: string;
+}
+
 interface TaskRow {
   id: string;
   family_id: string;
@@ -122,6 +130,21 @@ function toMember(row: MemberRow): Member {
     created_at: row.created_at,
   };
 }
+
+function toNote(row: FamilyNoteRow): FamilyNote {
+  return {
+    id: row.id,
+    family_id: row.family_id,
+    author_id: row.author_id,
+    content: row.content,
+    created_at: row.created_at,
+  };
+}
+
+/** 알림판(💬 우리 가족 한마디) 실시간 변경 */
+export type NotesRemoteEvent =
+  | { kind: 'upsert'; note: FamilyNote }
+  | { kind: 'delete'; noteId: string };
 
 function toTask(row: TaskRow): Task {
   return {
@@ -233,6 +256,77 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       default:
         return;
     }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 💬 우리 가족 한마디 (family_notes)                                  */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * 최근 한마디를 읽어 옵니다.
+   * 표가 아직 없으면(설정 전) null 을 돌려줍니다 — 공부 목록 불러오기는 그대로 동작해야 하니까요.
+   */
+  async loadNotes(): Promise<FamilyNote[] | null> {
+    const res = await this.client
+      .from('family_notes')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(60)
+      .retry(false);
+    if (res.error) {
+      if (isMissingSchema(res.error)) return null;
+      throw toUserError(res.error);
+    }
+    return ((res.data ?? []) as FamilyNoteRow[]).map(toNote);
+  }
+
+  /** 한마디 남기기 — 가족이면 누구나(부모·아이) 쓸 수 있습니다. */
+  async addNote(actorId: string, content: string, id: string): Promise<FamilyNote> {
+    const { data, error } = await this.client.rpc('study_add_note', {
+      p_actor_id: actorId,
+      p_content: content,
+      p_id: id,
+    });
+    if (error) throw toUserError(error);
+    if (!data) throw new Error('한마디를 남기지 못했어요.');
+    return toNote(data as FamilyNoteRow);
+  }
+
+  /** 한마디 지우기 — 내가 쓴 글, 또는 부모가 PIN 을 넣고 남의 글. (서버가 한 번 더 확인합니다) */
+  async deleteNote(actorId: string, noteId: string, pin?: string | null): Promise<void> {
+    const { error } = await this.client.rpc('study_delete_note', {
+      p_actor_id: actorId,
+      p_note_id: noteId,
+      p_pin: pin ?? null,
+    });
+    if (error) throw toUserError(error);
+  }
+
+  /**
+   * 알림판 실시간 구독 — tasks 와 따로 채널을 둡니다.
+   * (family_notes 표가 아직 없을 때 이 채널만 조용히 비고, 공부 목록 구독은 영향을 받지 않습니다)
+   */
+  subscribeNotes(familyId: string, onEvent: (event: NotesRemoteEvent) => void): () => void {
+    const channel = this.client
+      .channel(`study-notes:${familyId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'family_notes', filter: `family_id=eq.${familyId}` },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            const id = (payload.old as { id?: string } | null)?.id;
+            if (id) onEvent({ kind: 'delete', noteId: id });
+            return;
+          }
+          const row = payload.new as FamilyNoteRow | null;
+          if (row?.id) onEvent({ kind: 'upsert', note: toNote(row) });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void this.client.removeChannel(channel);
+    };
   }
 
   /** 부모 관리 PIN 확인 — 서버(family_secrets 의 bcrypt 해시)에서만 판단합니다. */

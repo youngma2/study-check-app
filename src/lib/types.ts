@@ -49,6 +49,16 @@ export interface Task {
   verified_at?: string | null;
 }
 
+/** 💬 우리 가족 한마디 — 가족 알림판에 남긴 짧은 글. */
+export interface FamilyNote {
+  id: string;
+  family_id: string;
+  /** 쓴 사람 (family_members.id) */
+  author_id: string;
+  content: string;
+  created_at: string;
+}
+
 export interface StudyDB {
   version: number;
   families: Family[];

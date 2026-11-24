@@ -28,9 +28,9 @@ npm run preview  # 빌드 결과 미리보기 (http://127.0.0.1:4174)
 상단 오른쪽 **이름 버튼 → 아빠 / 엄마 / 첫째 / 둘째** 을 눌러 시점을 바꾸면 권한 차이를 바로 볼 수 있습니다.
 
 - `http://127.0.0.1:5174/#as=mem_child2` 처럼 해시로 시작 사용자를 지정할 수 있습니다.
-- 아이 시점에서는 **부모로 바로 바꾸는 버튼이 보이지 않습니다.** 프로필 시트 맨 아래의 조용한
-  `🔒 부모 관리로 돌아가기 (PIN 필요)` 를 누르면 PIN 화면이 열리고, PIN 을 넣어야 부모 화면으로 갑니다.
-  (취소하면 보던 아이 화면 그대로 — 잠금은 풀리지 않습니다)
+- **아이 시점에서도 프로필에 `아빠`·`엄마` 가 그대로 보입니다**(자물쇠 `PIN` 배지).
+  누르면 **항상 PIN 화면이 먼저** 열리고, PIN 을 넣으면 **누른 그 부모 화면**으로 바뀝니다.
+  취소하면 보던 아이 화면 그대로 — 잠금은 풀리지 않습니다. (부모끼리는 PIN 없이 서로 바뀝니다)
 - 부모 시점(`#as=mem_dad`, `#as=mem_mom`, 또는 기본 주소)은 **부모 관리 PIN(4자리)** 을 먼저 물어봅니다.
   - Supabase 를 연결하면 PIN 은 **DB 에 bcrypt 해시로만** 저장되고 앱은 서버에 맞는지만 물어봅니다.
     (PIN 숫자는 이 저장소 어디에도 없습니다. `supabase/schema.sql` 의 6번 주석 참고)
@@ -50,7 +50,9 @@ npm run preview  # 빌드 결과 미리보기 (http://127.0.0.1:4174)
 | 완료 되돌리기 (`verified → todo`) | ✅ (PIN) | ❌ |
 | 공부 복사(다른 날로) | ✅ | 자기 것만 |
 | 기본 목록으로 그 날 한 번에 채우기 | ✅ (부모 화면) | ❌ (버튼 없음) |
-| 부모 화면 열기 / 아이→부모 전환 | PIN 입력 | `🔒 부모 관리로 돌아가기 (PIN 필요)` → PIN 입력 |
+| 부모 화면 열기 / 아이→부모 전환 | PIN 입력 | 프로필의 `아빠`·`엄마`(PIN 배지) → PIN 입력 |
+| 💬 우리 가족 한마디 남기기 | ✅ | ✅ |
+| 남의 한마디 지우기 | ✅ (PIN) | ❌ (내 글만) |
 | 구성원 이름 바꾸기 | ✅ (PIN) | ❌ |
 
 상태 흐름: **할 일(todo) → 완료(verified)** — 완료를 누른 순간 `verified_at` 에 시각이 남고 카드에 `오후 8:42 완료` 로 보입니다.
@@ -78,7 +80,14 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
 - **복사 시트**: 누구 공부를(아이별) · 며칠에 붙여넣을지(이번 주 날짜·내일·모레·다른 날) 고르고 복사. 이미 있는 숙제는 건너뜁니다.
 - **추가/수정 시트**: 아이 선택, 과목, 제목(+자주 쓰는 항목 프리셋), 날짜.
 - **역할 전환 시트**: 부모/아이 목록, 저장 상태 표시, `관리 잠금`, (부모) 이름 바꾸기.
-  아이 화면에서는 부모 항목이 보이지 않고, 맨 아래에 `🔒 부모 관리로 돌아가기 (PIN 필요)` 만 조용히 있습니다.
+  아이 화면에서도 `아빠`·`엄마` 가 보이고 `PIN` 배지가 붙습니다. 누르면 PIN 화면부터 — 누른 그 부모로 바뀝니다.
+- **💬 우리 가족 한마디(알림판)**: 아빠·엄마·아이 누구나 짧은 일정·전할 말을 남깁니다.
+  새 글은 다른 폰에 **실시간**으로 붙고, 아직 안 본 글은 화면 맨 위 **알림 배너**로 뜹니다(닫기 버튼).
+  `🔔 알림 켜기` 를 누르면 브라우저 알림도 함께 옵니다(화면을 보고 있지 않을 때). 알림음은 아주 작게.
+  내가 쓴 글은 스스로 지울 수 있고, 부모는 PIN 으로 남의 글도 지울 수 있습니다.
+- **부모 할 일 보드(부모 화면)**: 그 날 아빠·엄마에게 배정된 항목(예: 토요일 `독서록 검사`)이 있으면
+  아이들 보드 아래 `부모 할 일` 로 한 칸 더 보여 줍니다. 부모도 그 자리에서 `완료` 를 누를 수 있습니다.
+  아이 화면에는 보이지 않습니다.
 - **부모 PIN 잠금 화면**: 부모 시점으로 열면 4자리 숫자 키패드로 잠금을 풉니다. 아래에서 아이 시점으로 바로 바꿀 수 있고,
   아이 화면에서 돌아온 경우에는 왼쪽 위 `‹ 아이 화면으로` 로 취소할 수 있습니다(취소해도 잠금은 그대로).
 
@@ -88,6 +97,7 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
 쓰기는 DB RPC 가 `actor`(누가)와 (필요하면) 부모 관리 PIN 을 받아 권한을 검사합니다.
 
 1. Supabase 프로젝트 → **SQL Editor** 에서 [`supabase/schema.sql`](supabase/schema.sql) 전체 실행 (한 번, 여러 번 실행해도 안전)
+   - 공부 목록 표와 함께 **💬 우리 가족 한마디** 알림판 표(`family_notes`)도 이 SQL 로 만들어집니다.
    - 배포 페이지에 복사 버튼이 있는 안내 페이지도 있습니다: **https://youngma2.github.io/study-check-app/setup.html**
 2. **부모 관리 PIN 정하기** — SQL Editor 에서 한 번만 (PIN 숫자는 저장소에 적지 않습니다):
    ```sql
@@ -117,7 +127,7 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 
 ### 동기화 방식
 
-- **읽기**: `families` / `family_members` / `tasks` 를 RLS(`select` 허용)로 읽습니다.
+- **읽기**: `families` / `family_members` / `tasks` / `family_notes` 를 RLS(`select` 허용)로 읽습니다.
 - **쓰기**: 표를 직접 고치지 않고 아래 RPC 만 사용합니다(RLS 는 직접 쓰기를 막음).
 
 | RPC | 하는 일 | 허용 |
@@ -129,13 +139,17 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 | `study_verify_parent_pin` | 부모 관리 PIN 확인 | 누구나(맞는지 boolean 만) |
 | `study_set_parent_pin` | 부모 관리 PIN 정하기/바꾸기 | 처음 정할 때만 PIN 없이, 이후에는 지금 PIN 필요 |
 | `study_rename_member` | 구성원 이름 바꾸기 | 부모 + `p_pin` |
+| `study_add_note` | 💬 한마디 남기기 | 가족이면 누구나(부모·아이) |
+| `study_delete_note` | 💬 한마디 지우기 | 내 글은 누구나 / 남의 글은 부모 + `p_pin` |
 
 - `study_verify_parent_pin` 은 **틀린 횟수 제한이 없는 4자리 확인**이라, 가족 링크를 공개된 곳에 두면 안 됩니다.
   필요하면 시도 제한(lock-out)이나 더 긴 PIN 으로 바꿀 수 있습니다.
 
-- **실시간**: `tasks` · `family_members` · `families` 를 `supabase_realtime` publication 에 넣고
+- **실시간**: `tasks` · `family_members` · `families` · `family_notes` 를 `supabase_realtime` publication 에 넣고
   앱이 `postgres_changes` 를 구독합니다. 아이가 완료 요청을 누르면 부모 폰에 **새로고침 없이** 반영됩니다.
-  - 삭제까지 실시간으로 보내려면 두 테이블에 `replica identity full` 이 필요합니다(schema.sql 에 포함).
+  - 삭제까지 실시간으로 보내려면 `replica identity full` 이 필요합니다(schema.sql 에 포함).
+  - 알림판은 채널을 따로 둡니다. `family_notes` 표가 아직 없어도(설정 전) 공부 목록 구독은 그대로 동작하고,
+    알림판만 `알림판 준비 중` 안내가 됩니다.
   - 앱을 다시 열거나 화면에 돌아오면 최신 목록을 한 번 받아 와서, 백그라운드 중 놓친 변경도 맞춥니다.
 - 앱은 화면을 먼저 바꾸고(낙관적 반영) RPC 결과를 기다립니다. 서버가 거부하면 원래 상태로 되돌리고 이유를 보여 줍니다.
 
@@ -148,6 +162,7 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 families(id text, name)
   ├ family_members(id text, family_id, name, role['parent'|'child'], grade?, emoji, color, presets)
   ├ tasks(id text, family_id, member_id, title, subject, due_date, status, note?, created_by, verified_by?, verified_at?)
+  ├ family_notes(id text, family_id, author_id, content, created_at)   ← 💬 우리 가족 한마디
   └ family_secrets(family_id text primary key, parent_pin_hash text)   ← 부모 관리 PIN 해시 (anon 접근 불가)
 ```
 
@@ -174,7 +189,8 @@ src/
     AddTaskSheet.tsx      추가/수정 시트
     CopySheet.tsx         공부 복사 시트 (아이별 · 날짜별 붙여넣기)
     ParentPinGate.tsx     부모 관리 PIN 잠금 화면 (숫자 키패드)
-    ProfileSheet.tsx      역할 전환 시트 (+ 관리 잠금·이름 바꾸기)
+    ProfileSheet.tsx      역할 전환 시트 (아빠·엄마 + PIN 배지 · 관리 잠금 · 이름 바꾸기)
+    FamilyNotesBoard.tsx  💬 우리 가족 한마디 (알림판 · 실시간 · 안 읽은 글 배너)
     Sheet.tsx             바텀시트 공통
     icons.tsx             인라인 SVG 아이콘
   lib/
@@ -186,13 +202,16 @@ src/
     supabase.ts           Supabase 클라이언트 · 행 매핑 · RPC 쓰기 · Realtime 구독
     pin.ts                부모 관리 PIN (세션 보관 · 데모 모드 해시)
     defaults.ts           '기본 목록' — 같은 요일 패턴의 지난 기록으로 그 날 채우기
+    notes.ts              💬 한마디 기기 저장·안 읽은 시각·시간 표기
+    chime.ts              새 한마디 알림음 (아주 작은 두 음)
     study-context.tsx     React 상태/액션 훅 (낙관적 반영 + 실시간 병합 + 복사)
     theme.ts, cx.ts       색상 테마·className 유틸
 supabase/schema.sql       테이블 + RLS + study_* RPC + Realtime + 가족/이번 주 시드
 scripts/gen-setup.mjs     schema.sql → public/setup.html (SQL 복사 버튼 페이지)
 scripts/verify-sync.py    동기화 전/후 화면 자동 검증
 scripts/verify-live-sync.py  라이브 사이트에서 두 사람 시점 실시간 검증(테스트 항목 자동 정리)
-scripts/verify-child-parent-defaults.py  아이→부모 PIN 복귀 · 기본 목록 1탭 채우기 검증(데모 빌드)
+scripts/verify-child-parent-defaults.py  프로필 아빠·엄마 PIN 전환 · 기본 목록 1탭 채우기 검증(데모 빌드)
+scripts/verify-family-board.py  프로필 PIN 전환 · 부모 할 일 보드 · 💬 한마디 검증(데모 빌드)
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백)
 public/icons/             앱 아이콘(192/512/maskable/apple)
@@ -212,6 +231,23 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **프로필 PIN 전환 · 부모 할 일 · 💬 우리 가족 한마디** (2026-11-24)
+  - `supabase/schema.sql` (PGlite) — 49개 검사 전부 통과 + 알림판 25개 검사 전부 통과
+    - `family_notes` 열 구성·RLS·`replica identity full`·realtime publication(4개) 포함
+    - anon 은 읽기만 / 직접 INSERT·UPDATE·DELETE 차단 · RPC 로만 쓰기
+    - 아이·부모 모두 한마디 남기기 · 빈 글/300자 초과/없는 사용자 거부
+    - 내 글은 스스로 삭제 · 아이는 남의 글 삭제 불가 · 부모는 PIN(맞는 PIN)일 때만 남의 글 삭제
+    - 두 번 실행해도 표·한마디·숙제(39개) 그대로 · PIN 은 해시로만 저장
+  - `python3 scripts/verify-family-board.py` — 390×844 헤드리스 Chrome(데모 빌드) 44개 검사 전부 통과
+    - 아이 프로필에 아빠·엄마 + `PIN` 배지 · 아빠를 누르면 PIN 화면(목록은 아직 안 보임) · 취소하면 보던 아이 화면
+    - PIN 을 정하면 **누른 아빠** 화면 · 부모끼리는 PIN 없이 · 아이로 갔다가 엄마를 누르면 다시 PIN · 틀린 PIN 거부 ·
+      맞는 PIN 이면 **누른 엄마**(아빠 아님) · 새로고침 뒤에도 PIN 으로 열림
+    - 부모 화면 토요일에 `부모 할 일` 보드(아빠 · `독서록 검사`) + 그 자리에서 `완료` 가능 · 아이 화면에는 안 보임
+    - 알림판: 처음엔 빈 안내 → 남기면 글·글쓴이 표시 → 다른 사람 새 글은 위쪽 배너(누가·내용) → 닫으면 사라지고
+      다시 열어도 울리지 않음 → 내 글 삭제해도 남의 글은 그대로 · JS 오류 0
+  - `python3 scripts/verify-child-parent-defaults.py` — 같은 데모 빌드 34개 검사 전부 통과 (프로필 흐름을 새 방식으로 갱신)
+  - 부모 PIN 숫자와 아이 실제 이름을 저장소 전체에서 검색(node_modules·dist·dist-demo·.git 제외) → **0건**
 
 - `npx tsc --noEmit` — 타입 오류 0 · `npm run build` 성공 (`dist/`, `setup.html` 자동 생성)
 - `supabase/schema.sql` — 로컬 PostgreSQL(PGlite) 49개 검사 전부 통과

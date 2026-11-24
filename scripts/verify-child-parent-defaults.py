@@ -112,7 +112,7 @@ def main() -> int:
             page.on('pageerror', lambda error: errors.append(str(error)))
 
             # ---------------------------------------------------------------
-            # A. 아이 화면 — 조용한 '부모 관리로 돌아가기 (PIN 필요)' 버튼
+            # A. 아이 화면 — 프로필에 아빠·엄마가 보이고 PIN 배지가 붙는다
             # ---------------------------------------------------------------
             page.goto(BASE + '#as=mem_child2')
             page.wait_for_selector('[data-testid="open-profile"]')
@@ -121,19 +121,23 @@ def main() -> int:
 
             open_profile(page)
             sheet = page.locator('[role="dialog"]').inner_text()
-            check('아이 프로필: 부모 복귀 버튼이 있다', page.locator('[data-testid="request-parent-pin"]').count() == 1)
-            check('아이 프로필: 버튼 문구가 분명하다', '부모 관리로 돌아가기 (PIN 필요)' in sheet)
-            check('아이 프로필: 아빠·엄마 전환 항목 없음', '아빠' not in sheet and '엄마' not in sheet)
+            check('아이 프로필: 아빠·엄마 행이 있다',
+                  page.locator('[data-testid="profile-row-mem_dad"]').count() == 1
+                  and page.locator('[data-testid="profile-row-mem_mom"]').count() == 1)
+            check('아이 프로필: 부모 행에 PIN 배지',
+                  page.locator('[data-testid="lock-badge-mem_dad"]').count() == 1
+                  and page.locator('[data-testid="lock-badge-mem_mom"]').count() == 1)
+            check('아이 프로필: PIN 안내가 보인다', 'PIN' in sheet)
             check('아이 프로필: 부모 관리 잠금 버튼 없음', page.locator('[data-testid="lock-parent"]').count() == 0)
 
             # ---------------------------------------------------------------
-            # B. 버튼 → PIN 화면 → 취소하면 그대로 아이 화면 (잠금 안 풀림)
+            # B. 아빠를 누르면 PIN 화면 → 취소하면 그대로 아이 화면 (잠금 안 풀림)
             # ---------------------------------------------------------------
-            page.click('[data-testid="request-parent-pin"]')
+            page.click('[data-testid="profile-row-mem_dad"]')
             page.wait_for_selector('[data-testid="parent-pin-gate"]')
-            check('복귀 버튼: PIN 화면이 먼저 나온다', '부모 관리 PIN' in page.inner_text('[data-testid="parent-pin-gate"]'))
-            check('복귀 버튼: 아직 아이 목록도 보이지 않는다', page.locator('[data-testid="task-card"]').count() == 0)
-            check('복귀 버튼: 취소(아이 화면으로) 버튼이 있다', page.locator('[data-testid="cancel-parent-gate"]').count() == 1)
+            check('아빠 누르기: PIN 화면이 먼저 나온다', '부모 관리 PIN' in page.inner_text('[data-testid="parent-pin-gate"]'))
+            check('아빠 누르기: 아직 아이 목록도 보이지 않는다', page.locator('[data-testid="task-card"]').count() == 0)
+            check('아빠 누르기: 취소(아이 화면으로) 버튼이 있다', page.locator('[data-testid="cancel-parent-gate"]').count() == 1)
 
             page.click('[data-testid="cancel-parent-gate"]')
             page.wait_for_selector('[data-testid="open-profile"]')
@@ -143,7 +147,7 @@ def main() -> int:
 
             # 취소만으로는 잠금이 풀리지 않았다 — 다시 누르면 여전히 PIN 화면부터
             open_profile(page)
-            page.click('[data-testid="request-parent-pin"]')
+            page.click('[data-testid="profile-row-mem_dad"]')
             page.wait_for_selector('[data-testid="parent-pin-gate"]')
             check(
                 '취소 뒤에도 잠금 유지: 다시 PIN 화면부터',
@@ -224,7 +228,7 @@ def main() -> int:
             check('아이 시점으로 바꾸면 기본 목록 버튼은 숨김', page.locator('[data-testid="fill-defaults"]').count() == 0)
 
             open_profile(page)
-            page.click('[data-testid="request-parent-pin"]')
+            page.click('[data-testid="profile-row-mem_dad"]')
             page.wait_for_selector('[data-testid="parent-pin-gate"]')
             check(
                 '아이 화면 복귀: 잠금이 풀려 있어도 PIN 을 다시 묻는다',
@@ -235,7 +239,7 @@ def main() -> int:
             check('아이 화면 복귀 취소: 보던 아이로 돌아온다', '첫째' in page.inner_text('header'))
 
             open_profile(page)
-            page.click('[data-testid="request-parent-pin"]')
+            page.click('[data-testid="profile-row-mem_dad"]')
             page.wait_for_selector('[data-testid="parent-pin-gate"]')
             type_pin(page, '9999')
             page.wait_for_timeout(500)

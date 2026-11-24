@@ -30,9 +30,21 @@ import {
   verifyLocalPin,
   writeSessionPin,
 } from './pin';
+import {
+  LOCAL_NOTES_KEY,
+  NOTE_MAX_LENGTH,
+  loadLocalNotes,
+  loadNotesSeenAt,
+  newNoteId,
+  noteTime,
+  saveLocalNotes,
+  saveNotesSeenAt,
+  sortNotes,
+  type NotesState,
+} from './notes';
 import { LocalStorageAdapter, type RemoteEvent, type RealtimeState, type StorageChange, type StorageKind } from './storage';
-import { StorageSetupError, createSupabaseAdapter } from './supabase';
-import type { Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
+import { StorageSetupError, createSupabaseAdapter, type NotesRemoteEvent } from './supabase';
+import type { FamilyNote, Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
 
 export interface ActionResult {
   ok: boolean;
@@ -65,6 +77,15 @@ export interface StudyContextValue {
   setParentPin: (pin: string) => Promise<ActionResult>;
   lockParent: () => void;
   setCurrentMember: (memberId: string) => void;
+  /** 💬 우리 가족 한마디 — 최근 한마디 (새 글 먼저) */
+  notes: FamilyNote[];
+  /** 'unavailable' = Supabase 에 family_notes 표가 아직 없음(설정 전) */
+  notesState: NotesState;
+  /** 내가 마지막으로 본 뒤에 다른 사람이 남긴 한마디 */
+  unseenNotes: FamilyNote[];
+  markNotesSeen: () => void;
+  addNote: (content: string) => Promise<ActionResult>;
+  deleteNote: (noteId: string) => Promise<ActionResult>;
   tasksFor: (memberId: string, dateIso: string) => Task[];
   summaryFor: (memberId: string, dateIso: string) => TaskSummary;
   addTask: (input: NewTaskInput) => Promise<ActionResult>;
@@ -168,6 +189,202 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         ? prev
         : next.members.find((member) => member.role === 'parent')?.id ?? next.members[0]?.id ?? prev,
     );
+  }, []);
+
+  /* ---------------------------------------------------------------- */
+  /* 💬 우리 가족 한마디 (알림판)                                        */
+  /* ---------------------------------------------------------------- */
+
+  // 기기에 남아 있던 한마디를 먼저 보여 주고, 클라우드에 연결되면 서버 것이 원본이 됩니다.
+  const [notes, setNotes] = useState<FamilyNote[]>(() => loadLocalNotes());
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  const [notesState, setNotesState] = useState<NotesState>(() => (cloud ? 'loading' : 'ready'));
+  const notesStateRef = useRef<NotesState>(notesState);
+  notesStateRef.current = notesState;
+  const [notesSeenAt, setNotesSeenAtState] = useState<string | null>(() => loadNotesSeenAt());
+  const notesFamilyId = db.families[0]?.id;
+
+  // 서버(family_notes)에서 최근 한마디를 읽어 옵니다. 표가 없으면 알림판만 '준비 중'이 되고
+  // 공부 목록 불러오기·동기화는 그대로 동작합니다.
+  useEffect(() => {
+    if (!cloud) {
+      setNotesState('ready');
+      return;
+    }
+    if (syncState === 'setup') {
+      setNotesState('unavailable');
+      return;
+    }
+    if (mode !== 'supabase' || syncState !== 'synced') return;
+
+    let alive = true;
+    setNotesState((prev) => (prev === 'ready' ? prev : 'loading'));
+    cloud
+      .loadNotes()
+      .then((remote) => {
+        if (!alive) return;
+        if (remote === null) {
+          setNotesState('unavailable');
+          return;
+        }
+        const sorted = sortNotes(remote);
+        notesRef.current = sorted;
+        setNotes(sorted);
+        saveLocalNotes(sorted);
+        setNotesState('ready');
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        console.warn('[study-check] 알림판 불러오기 실패', error);
+        setNotesState(notesRef.current.length > 0 ? 'ready' : 'unavailable');
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [cloud, mode, syncState]);
+
+  // 데모(기기 저장) 모드: 같은 폰의 다른 탭에서 남긴 한마디도 바로 보이게 합니다.
+  useEffect(() => {
+    if (cloud) return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key && event.key !== LOCAL_NOTES_KEY) return;
+      const next = loadLocalNotes();
+      notesRef.current = next;
+      setNotes(next);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [cloud]);
+
+  /** 다른 기기에서 올라온 한마디를 즉시 반영합니다(내가 쓴 것은 이미 화면에 있어 id 로 합칩니다). */
+  const applyNoteRemote = useCallback((event: NotesRemoteEvent) => {
+    const prev = notesRef.current;
+    const next =
+      event.kind === 'delete'
+        ? prev.filter((note) => note.id !== event.noteId)
+        : prev.some((note) => note.id === event.note.id)
+          ? prev.map((note) => (note.id === event.note.id ? event.note : note))
+          : sortNotes([event.note, ...prev]);
+
+    notesRef.current = next;
+    setNotes(next);
+    saveLocalNotes(next);
+    if (notesStateRef.current !== 'ready') setNotesState('ready');
+  }, []);
+
+  useEffect(() => {
+    if (!cloud || mode !== 'supabase' || syncState !== 'synced' || notesState !== 'ready' || !notesFamilyId) return;
+    return cloud.subscribeNotes(notesFamilyId, applyNoteRemote);
+  }, [cloud, mode, syncState, notesState, notesFamilyId, applyNoteRemote]);
+
+  /** 알림판에 한마디 남기기 — 부모·아이 누구나. */
+  const addNote = useCallback(
+    async (content: string): Promise<ActionResult> => {
+      const text = content.trim();
+      if (!text) return { ok: false, error: '남길 말을 적어 주세요.' };
+      if (text.length > NOTE_MAX_LENGTH) {
+        return { ok: false, error: `한마디는 ${NOTE_MAX_LENGTH}자까지 적을 수 있어요.` };
+      }
+
+      const current = dbRef.current;
+      const actor =
+        current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+
+      const useCloud = modeRef.current === 'supabase' && cloud !== null;
+      if (useCloud && notesStateRef.current !== 'ready') {
+        return { ok: false, error: '알림판이 아직 준비 중이에요. 잠시 뒤 다시 시도해 주세요.' };
+      }
+
+      const id = newNoteId();
+      const note: FamilyNote = {
+        id,
+        family_id: actor.family_id,
+        author_id: actor.id,
+        content: text,
+        created_at: new Date().toISOString(),
+      };
+      const optimistic = sortNotes([note, ...notesRef.current]);
+      notesRef.current = optimistic;
+      setNotes(optimistic);
+
+      if (!useCloud || !cloud) {
+        saveLocalNotes(optimistic);
+        return { ok: true };
+      }
+
+      try {
+        const saved = await cloud.addNote(actor.id, text, id);
+        const merged = sortNotes([
+          saved,
+          ...notesRef.current.filter((item) => item.id !== saved.id && item.id !== id),
+        ]);
+        notesRef.current = merged;
+        setNotes(merged);
+        saveLocalNotes(merged);
+        return { ok: true };
+      } catch (error) {
+        const reverted = notesRef.current.filter((item) => item.id !== id);
+        notesRef.current = reverted;
+        setNotes(reverted);
+        return { ok: false, error: messageOf(error) };
+      }
+    },
+    [cloud],
+  );
+
+  /** 한마디 지우기 — 내가 쓴 글, 또는 부모가 PIN 을 넣고 남의 글. */
+  const deleteNote = useCallback(
+    async (noteId: string): Promise<ActionResult> => {
+      const note = notesRef.current.find((item) => item.id === noteId);
+      if (!note) return { ok: false, error: '한마디를 찾지 못했어요.' };
+
+      const current = dbRef.current;
+      const actor =
+        current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+
+      const mine = note.author_id === actor.id;
+      if (!mine && actor.role !== 'parent') {
+        return { ok: false, error: '내가 쓴 한마디만 지울 수 있어요.' };
+      }
+      if (!mine && !sessionPinRef.current) {
+        return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
+      }
+
+      const before = notesRef.current;
+      const next = before.filter((item) => item.id !== noteId);
+      notesRef.current = next;
+      setNotes(next);
+
+      const useCloud = modeRef.current === 'supabase' && cloud !== null;
+      if (!useCloud || !cloud) {
+        saveLocalNotes(next);
+        return { ok: true };
+      }
+
+      try {
+        await cloud.deleteNote(actor.id, noteId, sessionPinRef.current);
+        saveLocalNotes(next);
+        return { ok: true };
+      } catch (error) {
+        notesRef.current = before;
+        setNotes(before);
+        return { ok: false, error: messageOf(error) };
+      }
+    },
+    [cloud],
+  );
+
+  /** 지금까지 본 가장 최근 한마디 시각을 기억해, 다음에 새 글만 알려 줍니다. */
+  const markNotesSeen = useCallback(() => {
+    const latest = notesRef.current.reduce((max, note) => Math.max(max, noteTime(note)), 0);
+    if (latest === 0) return;
+    const iso = new Date(latest).toISOString();
+    saveNotesSeenAt(iso);
+    setNotesSeenAtState(iso);
   }, []);
 
   // 클라우드 설정이 있으면 가족 데이터를 한 번 받아 옵니다.
@@ -554,6 +771,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
 
   const currentMember = db.members.find((member) => member.id === currentMemberId) ?? db.members[0];
 
+  /** 아직 확인하지 않은 새 한마디 — 다른 사람이 남긴 것만 알립니다. */
+  const unseenNotes = useMemo(() => {
+    const seenTime = notesSeenAt ? noteTime(notesSeenAt) : 0;
+    return notes.filter((note) => note.author_id !== currentMember?.id && noteTime(note) > seenTime);
+  }, [notes, notesSeenAt, currentMember]);
+
   const tasksFor = useCallback(
     (memberId: string, dateIso: string) =>
       sortTasks(db.tasks.filter((task) => task.member_id === memberId && task.due_date === dateIso)),
@@ -578,6 +801,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       storageKind: mode,
       syncState,
       realtimeState,
+      notes,
+      notesState,
+      unseenNotes,
+      markNotesSeen,
+      addNote,
+      deleteNote,
       parentUnlocked: sessionPin !== null,
       parentPinSetupRequired: mode === 'local' && !localPinReady && syncState !== 'syncing',
       unlockParent,
@@ -600,6 +829,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     mode,
     syncState,
     realtimeState,
+    notes,
+    notesState,
+    unseenNotes,
+    markNotesSeen,
+    addNote,
+    deleteNote,
     sessionPin,
     localPinReady,
     unlockParent,

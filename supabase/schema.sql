@@ -13,6 +13,8 @@
 --       첫째   https://youngma2.github.io/study-check-app/#as=mem_child1
 --       둘째   https://youngma2.github.io/study-check-app/#as=mem_child2
 --   · 숙제 체크(완료)·추가·삭제가 폰끼리 실시간으로 반영됩니다(새로고침 없음).
+--   · 💬 우리 가족 한마디 — 아빠·엄마·아이 누구나 일정이나 전할 말을 남기고,
+--     새 글은 다른 폰에 바로 뜨며 앱 위쪽에 알림 배너로 나타납니다.
 --
 -- 권한 (앱 + DB 이중으로 막습니다)
 --   부모(아빠·엄마): 추가·수정·삭제·완료 되돌리기 — 부모 관리 PIN 필요
@@ -27,6 +29,7 @@
 -- 구조
 --   families ─┬─ family_members
 --             ├─ tasks
+--             ├─ family_notes (💬 우리 가족 한마디 — 부모·아이 누구나 남기는 알림판)
 --             └─ family_secrets (부모 관리 PIN 해시 · 앱에서 직접 읽지 않음)
 --   읽기는 누구나(가족 링크를 아는 기기), 쓰기는 아래 RPC 로만 가능하게 해 두고
 --   RPC 안에서 역할(parent/child)과 PIN 을 검사합니다.
@@ -104,16 +107,28 @@ create table if not exists public.family_secrets (
   updated_at      timestamptz not null default now()
 );
 
+-- 💬 우리 가족 한마디 — 가족 알림판. 부모·아이 누구나 짧은 글을 남깁니다.
+create table if not exists public.family_notes (
+  id         text primary key,
+  family_id  text not null references public.families (id) on delete cascade,
+  author_id  text not null references public.family_members (id) on delete cascade,
+  content    text not null check (length(btrim(content)) between 1 and 300),
+  created_at timestamptz not null default now()
+);
+
 create index if not exists tasks_family_due_idx on public.tasks (family_id, due_date);
 create index if not exists tasks_member_due_idx on public.tasks (member_id, due_date);
 create index if not exists tasks_pending_idx
   on public.tasks (family_id, due_date) where status = 'pending_verification';
 create index if not exists family_members_family_idx on public.family_members (family_id);
+create index if not exists family_notes_family_created_idx
+  on public.family_notes (family_id, created_at desc);
 
 -- Realtime 삭제 이벤트: RLS + family_id 필터를 쓰려면 예전 행 전체가 필요합니다.
 -- (기본 replica identity 는 기본키만 보내서 DELETE 가 구독자에게 전달되지 않습니다.)
 alter table public.tasks          replica identity full;
 alter table public.family_members replica identity full;
+alter table public.family_notes   replica identity full;
 
 -- ----------------------------------------------------------------------------
 -- 2. RLS — 읽기는 열고, 직접 쓰기는 막습니다(쓰기는 3번의 RPC 로만).
@@ -123,6 +138,7 @@ alter table public.family_members replica identity full;
 alter table public.families       enable row level security;
 alter table public.family_members enable row level security;
 alter table public.tasks          enable row level security;
+alter table public.family_notes   enable row level security;
 alter table public.family_secrets enable row level security;
 
 drop policy if exists study_read_families on public.families;
@@ -137,9 +153,13 @@ drop policy if exists study_read_tasks on public.tasks;
 create policy study_read_tasks on public.tasks
   for select to anon, authenticated using (true);
 
+drop policy if exists study_read_notes on public.family_notes;
+create policy study_read_notes on public.family_notes
+  for select to anon, authenticated using (true);
+
 grant usage on schema public to anon, authenticated;
-grant select on public.families, public.family_members, public.tasks to anon, authenticated;
-revoke insert, update, delete on public.families, public.family_members, public.tasks
+grant select on public.families, public.family_members, public.tasks, public.family_notes to anon, authenticated;
+revoke insert, update, delete on public.families, public.family_members, public.tasks, public.family_notes
   from anon, authenticated;
 
 -- PIN 해시 표: 권한 자체를 회수합니다(정책도 없음). RPC 안에서만 쓰입니다.
@@ -500,6 +520,89 @@ begin
 end;
 $$;
 
+-- 💬 우리 가족 한마디 남기기: 가족이면 누구나(부모·아이) 쓸 수 있습니다.
+create or replace function public.study_add_note(
+  p_actor_id text,
+  p_content  text,
+  p_id       text default null
+)
+returns public.family_notes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_actor   public.family_members;
+  v_note    public.family_notes;
+  v_content text := btrim(coalesce(p_content, ''));
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    raise exception '사용자를 찾을 수 없습니다. 링크를 다시 확인해 주세요.' using errcode = '42501';
+  end if;
+
+  if v_content = '' then
+    raise exception '남길 말을 적어 주세요.' using errcode = '22023';
+  end if;
+  if length(v_content) > 300 then
+    raise exception '한마디는 300자까지 적을 수 있습니다.' using errcode = '22023';
+  end if;
+
+  insert into public.family_notes (id, family_id, author_id, content)
+  values (
+    coalesce(nullif(btrim(p_id), ''), 'n_' || replace(gen_random_uuid()::text, '-', '')),
+    v_actor.family_id,
+    v_actor.id,
+    v_content
+  )
+  returning * into v_note;
+
+  return v_note;
+end;
+$$;
+
+-- 💬 우리 가족 한마디 지우기: 내가 쓴 글은 누구나, 남의 글은 부모가 PIN 을 넣고.
+drop function if exists public.study_delete_note(text, text);
+
+create or replace function public.study_delete_note(
+  p_actor_id text,
+  p_note_id  text,
+  p_pin      text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_actor public.family_members;
+  v_note  public.family_notes;
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    raise exception '사용자를 찾을 수 없습니다. 링크를 다시 확인해 주세요.' using errcode = '42501';
+  end if;
+
+  select * into v_note
+    from public.family_notes
+   where id = p_note_id and family_id = v_actor.family_id;
+  if not found then
+    raise exception '한마디를 찾을 수 없습니다. 새로고침해 주세요.' using errcode = 'P0002';
+  end if;
+
+  if v_note.author_id <> v_actor.id then
+    if v_actor.role <> 'parent' then
+      raise exception '내가 쓴 한마디만 지울 수 있습니다.' using errcode = '42501';
+    end if;
+    if not public.study_pin_is_valid(v_actor.family_id, p_pin) then
+      raise exception '부모 관리 PIN이 필요합니다. 앱에서 관리 잠금을 풀고 다시 시도해 주세요.' using errcode = '42501';
+    end if;
+  end if;
+
+  delete from public.family_notes where id = v_note.id;
+end;
+$$;
+
 revoke all on function public.study_add_task(text, text, text, text, date, text, text) from public;
 revoke all on function public.study_update_task(text, text, text, text, date, text) from public;
 revoke all on function public.study_set_task_status(text, text, text, text) from public;
@@ -507,6 +610,8 @@ revoke all on function public.study_delete_task(text, text, text) from public;
 revoke all on function public.study_verify_parent_pin(text, text) from public;
 revoke all on function public.study_set_parent_pin(text, text, text) from public;
 revoke all on function public.study_rename_member(text, text, text, text) from public;
+revoke all on function public.study_add_note(text, text, text) from public;
+revoke all on function public.study_delete_note(text, text, text) from public;
 -- 내부용: anon/authenticated 에게 열지 않습니다.
 revoke all on function public.study_pin_is_valid(text, text) from public, anon, authenticated;
 
@@ -517,9 +622,11 @@ grant execute on function public.study_delete_task(text, text, text) to anon, au
 grant execute on function public.study_verify_parent_pin(text, text) to anon, authenticated;
 grant execute on function public.study_set_parent_pin(text, text, text) to anon, authenticated;
 grant execute on function public.study_rename_member(text, text, text, text) to anon, authenticated;
+grant execute on function public.study_add_note(text, text, text) to anon, authenticated;
+grant execute on function public.study_delete_note(text, text, text) to anon, authenticated;
 
 -- ----------------------------------------------------------------------------
--- 4. Realtime — 이 세 테이블의 변경이 폰으로 즉시 전달되게 합니다.
+-- 4. Realtime — 이 테이블들의 변경이 폰으로 즉시 전달되게 합니다.
 --    (family_secrets 는 실시간 대상이 아닙니다.)
 -- ----------------------------------------------------------------------------
 
@@ -535,7 +642,7 @@ do $$
 declare
   t text;
 begin
-  foreach t in array array['families', 'family_members', 'tasks'] loop
+  foreach t in array array['families', 'family_members', 'tasks', 'family_notes'] loop
     begin
       execute format('alter publication supabase_realtime add table public.%I', t);
     exception

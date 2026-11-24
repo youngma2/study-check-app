@@ -76,6 +76,9 @@ const html = `<!doctype html>
           <li>오른쪽 아래 <b>Run</b> (또는 Ctrl/⌘ + Enter)</li>
           <li>이 앱을 다시 열면 가족끼리 실시간 동기화가 켜집니다</li>
         </ol>
+        <p class="note" style="margin: -6px 0 12px;">
+          이 SQL 은 공부 목록 표와 함께 <b>💬 우리 가족 한마디</b> 알림판 표(family_notes)도 만들어 줍니다.
+        </p>
 
         <div class="actions">
           <button id="copy" type="button">SQL 전체 복사</button>

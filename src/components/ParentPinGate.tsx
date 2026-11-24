@@ -8,6 +8,8 @@ interface ParentPinGateProps {
   familyName: string;
   /** 'unlock': 이미 PIN 이 있는 경우 / 'setup': 이 기기(데모)에서 처음 정하는 경우 */
   mode: 'unlock' | 'setup';
+  /** 어느 부모 화면을 열려고 하는지 (예: '아빠') — 안내 문구에 씁니다. */
+  targetName?: string;
   children: Member[];
   onSubmit: (pin: string) => Promise<{ ok: boolean; error?: string }>;
   onSwitchChild: (memberId: string) => void;
@@ -21,7 +23,7 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
  * 부모 관리 PIN 잠금 화면.
  * 아이 화면에서는 보이지 않고, 부모 시점(#as=mem_dad 등)으로 열면 가장 먼저 이 화면이 나옵니다.
  */
-export function ParentPinGate({ familyName, mode, children, onSubmit, onSwitchChild, onCancel }: ParentPinGateProps) {
+export function ParentPinGate({ familyName, mode, targetName, children, onSubmit, onSwitchChild, onCancel }: ParentPinGateProps) {
   const [digits, setDigits] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export function ParentPinGate({ familyName, mode, children, onSubmit, onSwitchCh
       ? step === 'enter'
         ? '이 기기에서 쓸 4자리 숫자를 정해 주세요.'
         : '방금 정한 4자리 숫자를 다시 입력해 주세요.'
-      : '부모님만 들어갈 수 있어요. 4자리 PIN을 입력해 주세요.';
+      : `${targetName ?? '부모'} 화면은 부모님만 들어갈 수 있어요. 4자리 PIN을 입력해 주세요.`;
 
   const runSubmit = useCallback(
     async (pin: string) => {

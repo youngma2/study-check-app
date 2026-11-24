@@ -4,12 +4,15 @@ import { AddTaskSheet } from './components/AddTaskSheet';
 import { ChildBoard } from './components/ChildBoard';
 import { CopySheet } from './components/CopySheet';
 import { DayOverview } from './components/DayOverview';
+import { FamilyNotesBoard } from './components/FamilyNotesBoard';
 import { ParentPinGate } from './components/ParentPinGate';
 import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
-import { CopyIcon, LockIcon, PlusIcon, UndoIcon } from './components/icons';
+import { CopyIcon, LockIcon, PlusIcon, UndoIcon, XIcon } from './components/icons';
+import { playNoteChime } from './lib/chime';
 import { addDays, formatTimeKo, fromISODate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { defaultItemsForDay } from './lib/defaults';
+import { formatNoteTime } from './lib/notes';
 import { summarize } from './lib/store';
 import { useStudy, type ActionResult } from './lib/study-context';
 import type { NewTaskInput, Task } from './lib/types';
@@ -19,6 +22,7 @@ export default function App() {
   const {
     currentMember,
     children,
+    parents,
     isParent,
     parentUnlocked,
     parentPinSetupRequired,
@@ -33,6 +37,12 @@ export default function App() {
     setStatus,
     removeTask,
     resetDemo,
+    notes,
+    notesState,
+    unseenNotes,
+    markNotesSeen,
+    addNote,
+    deleteNote,
   } = study;
 
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date()));
@@ -46,8 +56,14 @@ export default function App() {
   /** 아이 화면에서 부모 관리로 돌아갈 때: PIN 화면을 반드시 거치고, 취소하면 이 아이 화면으로 돌아옵니다. */
   const [parentGateForced, setParentGateForced] = useState(false);
   const [parentGateReturnTo, setParentGateReturnTo] = useState<string | null>(null);
+  /** 어느 부모 화면을 열려는지 (아빠·엄마 행을 누른 경우) */
+  const [parentGateTarget, setParentGateTarget] = useState<string | null>(null);
   const [fillingDefaults, setFillingDefaults] = useState(false);
   const fillingDefaultsRef = useRef(false);
+  /** 브라우저 알림 권한 ('unsupported' = 이 브라우저에 알림 기능 없음) */
+  const [notifyPermission, setNotifyPermission] = useState<'granted' | 'denied' | 'default' | 'unsupported'>(
+    () => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'),
+  );
 
   const notify = useCallback((message: string) => setToast(message), []);
 
@@ -57,10 +73,68 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  const latestUnseen = unseenNotes[0] ?? null;
+  const latestUnseenAuthor = latestUnseen
+    ? study.members.find((member) => member.id === latestUnseen.author_id)
+    : undefined;
+
+  /**
+   * 새 한마디가 올라오면: 알림음 + (화면을 보고 있지 않을 때) 브라우저 알림.
+   * 같은 글에는 한 번만 반응합니다.
+   */
+  const notifiedNoteRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!latestUnseen) return;
+    if (notifiedNoteRef.current === latestUnseen.id) return;
+    notifiedNoteRef.current = latestUnseen.id;
+    playNoteChime();
+    if (notifyPermission === 'granted' && document.visibilityState !== 'visible') {
+      try {
+        new Notification('💬 우리 가족 한마디', {
+          body: `${latestUnseenAuthor?.name ?? '가족'}: ${latestUnseen.content}`,
+          tag: `study-note-${latestUnseen.id}`,
+        });
+      } catch {
+        /* 알림이 안 떠도 위쪽 배너로 알려 줍니다. */
+      }
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [latestUnseen, latestUnseenAuthor, notifyPermission]);
+
+  /** 브라우저 알림 권한 요청 (버튼을 누를 때만) */
+  const requestNotifyPermission = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    try {
+      const result = await Notification.requestPermission();
+      setNotifyPermission(result);
+    } catch {
+      /* 권한 창을 띄울 수 없는 환경 */
+    }
+  };
+
   /** 부모는 아이들 전체를, 아이는 자기 것만 봅니다. */
   const visibleMembers = useMemo(
     () => (isParent ? children : children.filter((member) => member.id === currentMember.id)),
     [isParent, children, currentMember.id],
+  );
+
+  /**
+   * 부모 화면에서는 그 날 부모(아빠·엄마)에게 배정된 할 일도 같이 보여 줍니다.
+   * (예: 토요일 아빠의 '독서록 검사') 아이 화면은 그대로 자기 것만 봅니다.
+   */
+  const parentBoardMembers = useMemo(
+    () => (isParent ? parents.filter((member) => tasksFor(member.id, selectedDate).length > 0) : []),
+    [isParent, parents, selectedDate, tasksFor],
+  );
+  const dayBoardMembers = useMemo(
+    () => [...visibleMembers, ...parentBoardMembers],
+    [visibleMembers, parentBoardMembers],
+  );
+
+  /** 주간 진행률은 부모 화면이면 부모 할 일까지 포함해 셈합니다. */
+  const progressMembers = useMemo(
+    () => (isParent ? [...children, ...parents] : children.filter((member) => member.id === currentMember.id)),
+    [isParent, children, parents, currentMember.id],
   );
 
   const weekDays = useMemo(() => weekDates(weekStart), [weekStart]);
@@ -70,16 +144,16 @@ export default function App() {
     const map: Record<string, DayProgress> = {};
     for (const day of weekDays) {
       const iso = toISODate(day);
-      const dayTasks = visibleMembers.flatMap((member) => tasksFor(member.id, iso));
+      const dayTasks = progressMembers.flatMap((member) => tasksFor(member.id, iso));
       const summary = summarize(dayTasks);
       map[iso] = { total: summary.total, verified: summary.verified, pending: summary.pending };
     }
     return map;
-  }, [weekDays, visibleMembers, tasksFor]);
+  }, [weekDays, progressMembers, tasksFor]);
 
   const dayTasks = useMemo(
-    () => visibleMembers.flatMap((member) => tasksFor(member.id, selectedDate)),
-    [visibleMembers, selectedDate, tasksFor],
+    () => dayBoardMembers.flatMap((member) => tasksFor(member.id, selectedDate)),
+    [dayBoardMembers, selectedDate, tasksFor],
   );
   const daySummary = useMemo(() => summarize(dayTasks), [dayTasks]);
   const weekPending = useMemo(
@@ -155,14 +229,17 @@ export default function App() {
   const openCopyForTask = (task: Task) => setCopySources([task]);
 
   /**
-   * 아이 화면 → 부모 관리. 부모 화면은 이 경우에도 항상 PIN 확인부터 시작하고,
-   * 취소하면 보던 아이 화면으로 그대로 돌아갑니다(잠금은 풀리지 않음).
+   * 아이 화면 → 부모 관리. 프로필에서 누른 아빠·엄마를 그대로 열되,
+   * 이 경우에도 항상 PIN 확인부터 시작하고 취소하면 보던 아이 화면으로 돌아갑니다(잠금은 풀리지 않음).
    */
-  const handleRequestParent = () => {
+  const handleRequestParent = (memberId: string) => {
     const target =
-      study.members.find((member) => member.role === 'parent' && member.id === 'mem_dad') ?? study.parents[0];
+      study.parents.find((member) => member.id === memberId) ??
+      study.members.find((member) => member.role === 'parent' && member.id === 'mem_dad') ??
+      study.parents[0];
     if (!target) return;
     setProfileOpen(false);
+    setParentGateTarget(target.id);
     setParentGateReturnTo(currentMember.id);
     setParentGateForced(true);
     study.setCurrentMember(target.id);
@@ -172,6 +249,7 @@ export default function App() {
     const back = parentGateReturnTo;
     setParentGateForced(false);
     setParentGateReturnTo(null);
+    setParentGateTarget(null);
     if (back) study.setCurrentMember(back);
   };
 
@@ -257,18 +335,21 @@ export default function App() {
         <ParentPinGate
           familyName={study.familyName}
           mode={parentPinSetupRequired ? 'setup' : 'unlock'}
+          targetName={parentGateTarget ? study.members.find((member) => member.id === parentGateTarget)?.name : undefined}
           children={study.children}
           onSubmit={async (pin) => {
             const result = parentPinSetupRequired ? await setParentPin(pin) : await unlockParent(pin);
             if (result.ok) {
               setParentGateForced(false);
               setParentGateReturnTo(null);
+              setParentGateTarget(null);
             }
             return result;
           }}
           onSwitchChild={(memberId) => {
             setParentGateForced(false);
             setParentGateReturnTo(null);
+            setParentGateTarget(null);
             study.setCurrentMember(memberId);
           }}
           onCancel={parentGateReturnTo ? cancelParentGate : undefined}
@@ -295,6 +376,37 @@ export default function App() {
       />
 
       <main className="mx-auto w-full max-w-md px-4 pb-36 pt-3">
+        {latestUnseen ? (
+          <div
+            data-testid="family-note-alert"
+            className="mb-3 flex items-start gap-2 rounded-[22px] bg-gradient-to-r from-indigo-600 to-violet-600 p-3 text-white shadow-lg shadow-indigo-500/25"
+          >
+            <span aria-hidden className="mt-0.5 text-[16px]">
+              💬
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-extrabold tracking-wide text-white/75">
+                새 한마디 · {latestUnseenAuthor?.name ?? '가족'}
+              </p>
+              <p className="mt-0.5 break-words text-[12.5px] font-extrabold leading-snug">
+                {latestUnseen.content}
+              </p>
+              <p className="mt-1 text-[9.5px] font-bold text-white/60">
+                {formatNoteTime(latestUnseen.created_at)}
+              </p>
+            </div>
+            <button
+              type="button"
+              data-testid="dismiss-note-alert"
+              aria-label="새 한마디 알림 닫기"
+              onClick={markNotesSeen}
+              className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/15 text-white transition active:scale-90"
+            >
+              <XIcon className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null}
+
         <WeekStrip
           weekStart={weekStart}
           selectedDate={selectedDate}
@@ -344,6 +456,19 @@ export default function App() {
             어제 것 가져오기
           </button>
         </div>
+
+        <FamilyNotesBoard
+          notes={notes}
+          members={study.members}
+          currentMemberId={currentMember.id}
+          isParent={isParent}
+          state={notesState}
+          onSubmit={addNote}
+          onDelete={deleteNote}
+          onSeen={markNotesSeen}
+          notifyPermission={notifyPermission}
+          onEnableAlerts={requestNotifyPermission}
+        />
 
         {study.syncState === 'setup' ? (
           <div
@@ -396,6 +521,28 @@ export default function App() {
               onCopy={openCopyForTask}
             />
           ))}
+
+          {parentBoardMembers.length > 0 ? (
+            <div data-testid="parent-boards" className="space-y-2 pt-1">
+              <p className="px-1 text-[10px] font-extrabold tracking-wide text-slate-400">부모 할 일</p>
+              {parentBoardMembers.map((member) => (
+                <ChildBoard
+                  key={member.id}
+                  member={member}
+                  tasks={tasksFor(member.id, selectedDate)}
+                  canAdd
+                  canComplete
+                  canManage
+                  onAdd={() => openAdd(member.id)}
+                  onComplete={handleComplete}
+                  onRevert={handleRevert}
+                  onEdit={openEdit}
+                  onDelete={handleDelete}
+                  onCopy={openCopyForTask}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <p className="mt-5 px-2 text-center text-[10px] font-medium leading-relaxed text-slate-400">

@@ -12,11 +12,11 @@ interface ProfileSheetProps {
   onClose: () => void;
   members: Member[];
   currentMemberId: string;
-  /** 지금 보고 있는 사람이 부모인지 — 아이 화면에서는 부모 전환 목록을 아예 숨깁니다. */
+  /** 지금 보고 있는 사람이 부모인지 — 아이 화면에서는 아빠·엄마를 눌러도 PIN을 먼저 묻습니다. */
   viewerIsParent: boolean;
   onSelect: (memberId: string) => void;
-  /** 아이 화면에서 부모 관리로 돌아가기 — PIN 확인 화면을 엽니다. */
-  onRequestParent: () => void;
+  /** 아이 화면에서 아빠·엄마를 눌렀을 때 — PIN 확인 화면을 엽니다. */
+  onRequestParent: (memberId: string) => void;
   onLock: () => void;
   onRename: (memberId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
   onResetDemo: () => void | Promise<void>;
@@ -96,13 +96,21 @@ export function ProfileSheet({
     const theme = memberTheme(member.color);
     const active = member.id === currentMemberId;
     const editing = editingId === member.id;
+    /** 부모 행 + 아이가 보는 중 → 누르면 PIN 부터 */
+    const needsPin = member.role === 'parent' && !viewerIsParent;
 
     return (
       <div key={member.id}>
         <div className="flex items-center gap-1">
           <button
             type="button"
+            data-testid={`profile-row-${member.id}`}
             onClick={() => {
+              if (needsPin) {
+                onRequestParent(member.id);
+                onClose();
+                return;
+              }
               onSelect(member.id);
               onClose();
             }}
@@ -121,10 +129,21 @@ export function ProfileSheet({
               <span className="flex items-center gap-1.5 text-[13px] font-extrabold text-slate-900">
                 {member.name}
                 {member.grade ? <span className="text-[9.5px] font-bold text-slate-400">{member.grade}</span> : null}
+                {needsPin ? (
+                  <span
+                    data-testid={`lock-badge-${member.id}`}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[8.5px] font-extrabold text-amber-600 ring-1 ring-amber-200/70"
+                  >
+                    <LockIcon className="h-2.5 w-2.5" strokeWidth={2.6} />
+                    PIN
+                  </span>
+                ) : null}
               </span>
               <span className="mt-0.5 block text-[10px] font-semibold text-slate-400">
                 {member.role === 'parent'
-                  ? '확인 · 수정 · 삭제 가능'
+                  ? needsPin
+                    ? 'PIN을 입력하면 열려요'
+                    : '확인 · 수정 · 삭제 가능'
                   : '완료 체크 · 자기 공부 추가 (삭제 불가)'}
               </span>
             </span>
@@ -197,16 +216,22 @@ export function ProfileSheet({
       subtitle={
         viewerIsParent
           ? '이름을 누르면 그 사람 시점으로 바뀝니다. 부모 화면은 PIN으로 잠겨 있어요.'
-          : '이름을 누르면 그 사람 시점으로 바뀝니다. 부모 화면은 PIN을 아는 부모님만 열 수 있어요.'
+          : '아빠·엄마를 누르면 PIN을 먼저 물어요. 아이는 누르는 대로 바로 바뀝니다.'
       }
     >
       <div className="space-y-4 pb-1">
-        {viewerIsParent ? (
-          <div>
-            <p className="mb-1.5 px-1 text-[10px] font-extrabold tracking-wide text-slate-400">부모</p>
-            <div className="space-y-1.5">{parents.map(renderRow)}</div>
-          </div>
-        ) : null}
+        <div>
+          <p className="mb-1.5 flex items-center gap-1 px-1 text-[10px] font-extrabold tracking-wide text-slate-400">
+            부모
+            {!viewerIsParent ? (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-50 px-1.5 py-0.5 text-[8.5px] font-extrabold text-amber-600">
+                <LockIcon className="h-2.5 w-2.5" strokeWidth={2.6} />
+                PIN 필요
+              </span>
+            ) : null}
+          </p>
+          <div className="space-y-1.5">{parents.map(renderRow)}</div>
+        </div>
 
         <div>
           <p className="mb-1.5 px-1 text-[10px] font-extrabold tracking-wide text-slate-400">아이</p>
@@ -238,21 +263,6 @@ export function ProfileSheet({
             </p>
           )}
         </div>
-
-        {!viewerIsParent ? (
-          <button
-            type="button"
-            data-testid="request-parent-pin"
-            onClick={() => {
-              onRequestParent();
-              onClose();
-            }}
-            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2.5 text-[10.5px] font-bold text-slate-400 ring-1 ring-slate-900/5 transition hover:bg-slate-50 hover:text-slate-500 active:scale-[0.99]"
-          >
-            <LockIcon className="h-3 w-3" />
-            부모 관리로 돌아가기 (PIN 필요)
-          </button>
-        ) : null}
 
         {viewerIsParent ? (
           <button
