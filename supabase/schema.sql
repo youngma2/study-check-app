@@ -520,6 +520,72 @@ begin
 end;
 $$;
 
+-- 구성원 '빠른 추가' 항목(presets) 바꾸기: 부모 + 부모 관리 PIN.
+--   presets 는 [{ "title": "...", "subject": "math" }] 모양의 JSON 배열입니다.
+--   예) select public.study_update_member_presets('mem_dad', 'mem_child2', '[{"title":"책 읽기 30분","subject":"reading"}]'::jsonb, '네자리PIN');
+create or replace function public.study_update_member_presets(
+  p_actor_id  text,
+  p_member_id text,
+  p_presets   jsonb,
+  p_pin       text default null
+)
+returns public.family_members
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_actor  public.family_members;
+  v_member public.family_members;
+  v_item   jsonb;
+  v_title  text;
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    raise exception '사용자를 찾을 수 없습니다. 링크를 다시 확인해 주세요.' using errcode = '42501';
+  end if;
+  if v_actor.role <> 'parent' then
+    raise exception '빠른 추가 항목은 부모님만 바꿀 수 있습니다.' using errcode = '42501';
+  end if;
+  if not public.study_pin_is_valid(v_actor.family_id, p_pin) then
+    raise exception '부모 관리 PIN이 필요합니다. 앱에서 관리 잠금을 풀고 다시 시도해 주세요.' using errcode = '42501';
+  end if;
+
+  select * into v_member
+    from public.family_members
+   where id = p_member_id and family_id = v_actor.family_id;
+  if not found then
+    raise exception '같은 가족 구성원의 빠른 추가 항목만 바꿀 수 있습니다.' using errcode = '42501';
+  end if;
+
+  if p_presets is null or jsonb_typeof(p_presets) <> 'array' then
+    raise exception '빠른 추가 항목은 배열(JSON array)로 보내 주세요.' using errcode = '22023';
+  end if;
+  if jsonb_array_length(p_presets) > 30 then
+    raise exception '빠른 추가 항목은 30개까지 넣을 수 있습니다.' using errcode = '22023';
+  end if;
+
+  -- 각 항목이 { "title": "...", "subject": "..." } 모양인지 확인합니다.
+  for v_item in select * from jsonb_array_elements(p_presets) loop
+    if jsonb_typeof(v_item) <> 'object'
+       or coalesce(btrim(v_item ->> 'title'), '') = '' then
+      raise exception '빠른 추가 항목은 {"title": "...", "subject": "..."} 모양이어야 합니다.' using errcode = '22023';
+    end if;
+    v_title := btrim(v_item ->> 'title');
+    if length(v_title) > 120 then
+      raise exception '항목 이름은 120자까지 적을 수 있습니다.' using errcode = '22023';
+    end if;
+  end loop;
+
+  update public.family_members
+     set presets = p_presets
+   where id = v_member.id
+  returning * into v_member;
+
+  return v_member;
+end;
+$$;
+
 -- 💬 우리 가족 한마디 남기기: 가족이면 누구나(부모·아이) 쓸 수 있습니다.
 create or replace function public.study_add_note(
   p_actor_id text,
@@ -610,6 +676,7 @@ revoke all on function public.study_delete_task(text, text, text) from public;
 revoke all on function public.study_verify_parent_pin(text, text) from public;
 revoke all on function public.study_set_parent_pin(text, text, text) from public;
 revoke all on function public.study_rename_member(text, text, text, text) from public;
+revoke all on function public.study_update_member_presets(text, text, jsonb, text) from public;
 revoke all on function public.study_add_note(text, text, text) from public;
 revoke all on function public.study_delete_note(text, text, text) from public;
 -- 내부용: anon/authenticated 에게 열지 않습니다.
@@ -622,6 +689,7 @@ grant execute on function public.study_delete_task(text, text, text) to anon, au
 grant execute on function public.study_verify_parent_pin(text, text) to anon, authenticated;
 grant execute on function public.study_set_parent_pin(text, text, text) to anon, authenticated;
 grant execute on function public.study_rename_member(text, text, text, text) to anon, authenticated;
+grant execute on function public.study_update_member_presets(text, text, jsonb, text) to anon, authenticated;
 grant execute on function public.study_add_note(text, text, text) to anon, authenticated;
 grant execute on function public.study_delete_note(text, text, text) to anon, authenticated;
 
