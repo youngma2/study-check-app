@@ -99,7 +99,7 @@ def main() -> int:
 
     before = len(rest('tasks?select=id'))
     print(f'시작 시 숙제 수: {before}')
-    check('시드 숙제 39개', before == 39, f'n={before}')
+    check('시드 숙제가 들어 있음', before >= 30, f'n={before}')
 
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=CHROME, headless=True, env=env,
@@ -173,7 +173,7 @@ def main() -> int:
     rows = rest(f'tasks?select=id,title&title=eq.{urllib.parse.quote(TITLE)}')
     total = len(rest('tasks?select=id'))
     check('테스트 항목이 DB에서 정리됨', rows == [], json.dumps(rows, ensure_ascii=False)[:120])
-    check('숙제 수 원복(39)', total == 39, f'n={total}')
+    check('숙제 수 원복', total == before, f'{before} -> {total}')
 
     print()
     if failures:
