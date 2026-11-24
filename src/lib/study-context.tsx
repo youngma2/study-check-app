@@ -84,7 +84,7 @@ export interface StudyContextValue {
   /** 내가 마지막으로 본 뒤에 다른 사람이 남긴 한마디 */
   unseenNotes: FamilyNote[];
   markNotesSeen: () => void;
-  addNote: (content: string) => Promise<ActionResult>;
+  addNote: (content: string, dateIso?: string) => Promise<ActionResult>;
   deleteNote: (noteId: string) => Promise<ActionResult>;
   tasksFor: (memberId: string, dateIso: string) => Task[];
   summaryFor: (memberId: string, dateIso: string) => TaskSummary;
@@ -279,9 +279,9 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     return cloud.subscribeNotes(notesFamilyId, applyNoteRemote);
   }, [cloud, mode, syncState, notesState, notesFamilyId, applyNoteRemote]);
 
-  /** 알림판에 한마디 남기기 — 부모·아이 누구나. */
+  /** 알림판에 한마디 남기기 — 부모·아이 누구나. dateIso 를 주면 그 날짜 알림판에 붙습니다. */
   const addNote = useCallback(
-    async (content: string): Promise<ActionResult> => {
+    async (content: string, dateIso?: string): Promise<ActionResult> => {
       const text = content.trim();
       if (!text) return { ok: false, error: '남길 말을 적어 주세요.' };
       if (text.length > NOTE_MAX_LENGTH) {
@@ -301,7 +301,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         return { ok: false, error: '알림판이 아직 준비 중이에요. 잠시 뒤 다시 시도해 주세요.' };
       }
 
-      const id = newNoteId();
+      const id = newNoteId(dateIso);
       const note: FamilyNote = {
         id,
         family_id: actor.family_id,

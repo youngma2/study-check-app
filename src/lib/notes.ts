@@ -1,4 +1,4 @@
-import { formatTimeKo, todayISO, toISODate, addDays } from './date';
+import { formatTimeKo, koreaTodayISO, todayISO, toISODate, addDays } from './date';
 import type { FamilyNote } from './types';
 
 /**
@@ -78,8 +78,25 @@ export function sortNotes(notes: FamilyNote[]): FamilyNote[] {
   return [...notes].sort((a, b) => noteTime(b) - noteTime(a));
 }
 
-export function newNoteId(): string {
-  return `n_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+/** 새 한마디 id. 날짜를 아는 경우 `n_2026-11-25_...` 처럼 날짜를 함께 박아 둡니다. */
+export function newNoteId(dateIso?: string): string {
+  const suffix = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return dateIso ? `n_${dateIso}_${suffix}` : `n_${suffix}`;
+}
+
+/** id 에 박아 둔 날짜(`n_2026-11-25_…`) — 예전 글은 한국 날짜 기준 작성일로 셉니다. */
+const NOTE_ID_DATE = /^n_(\d{4}-\d{2}-\d{2})_/;
+
+/**
+ * 이 한마디가 어느 날짜의 알림판에 붙는지 'YYYY-MM-DD' 로 돌려줍니다.
+ * 날짜별로 알림판을 따로 보여 주는 기준입니다.
+ */
+export function noteDate(note: Pick<FamilyNote, 'id' | 'created_at'>): string {
+  const fromId = NOTE_ID_DATE.exec(note.id);
+  if (fromId) return fromId[1];
+  const created = new Date(note.created_at);
+  if (Number.isNaN(created.getTime())) return koreaTodayISO();
+  return koreaTodayISO(created);
 }
 
 /** '방금', '12분 전', '오후 8:12', '어제 오후 8:12', '11/20 오후 8:12' */

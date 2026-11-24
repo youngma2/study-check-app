@@ -1,17 +1,20 @@
 import { useRef, useState } from 'react';
 import { cx } from '../lib/cx';
-import { NOTE_MAX_LENGTH, formatNoteTime, type NotesState } from '../lib/notes';
+import { formatShortDate, relativeDayLabel } from '../lib/date';
+import { NOTE_MAX_LENGTH, formatNoteTime, noteDate, type NotesState } from '../lib/notes';
 import { memberTheme } from '../lib/theme';
 import type { FamilyNote, Member } from '../lib/types';
 import { XIcon } from './icons';
 
 interface FamilyNotesBoardProps {
   notes: FamilyNote[];
+  /** 보고 있는 날짜 — 알림판은 이 날짜의 한마디만 보여 줍니다. */
+  dateIso: string;
   members: Member[];
   currentMemberId: string;
   isParent: boolean;
   state: NotesState;
-  onSubmit: (content: string) => Promise<{ ok: boolean; error?: string }>;
+  onSubmit: (content: string, dateIso: string) => Promise<{ ok: boolean; error?: string }>;
   onDelete: (noteId: string) => Promise<{ ok: boolean; error?: string }>;
   /** 알림판을 읽었을 때 — 새 소식 배너를 닫습니다. */
   onSeen: () => void;
@@ -23,10 +26,12 @@ interface FamilyNotesBoardProps {
  * 💬 우리 가족 한마디
  *
  * 아빠·엄마·아이 누구나 짧은 일정이나 전할 말을 남기는 알림판입니다.
+ * 날짜마다 따로 붙어서, 보고 있는 날의 한마디만 보입니다.
  * 새 글이 올라오면 다른 폰에 실시간으로 붙고, 아직 안 본 글은 위쪽 배너로 알려 줍니다.
  */
 export function FamilyNotesBoard({
   notes,
+  dateIso,
   members,
   currentMemberId,
   isParent,
@@ -44,7 +49,10 @@ export function FamilyNotesBoard({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const ready = state === 'ready';
-  const visibleNotes = showAll ? notes : notes.slice(0, 4);
+  const dayNotes = notes.filter((note) => noteDate(note) === dateIso);
+  const relative = relativeDayLabel(dateIso);
+  const dateLabel = relative ? `${relative} · ${formatShortDate(dateIso)}` : formatShortDate(dateIso);
+  const visibleNotes = showAll ? dayNotes : dayNotes.slice(0, 4);
 
   const submit = async () => {
     if (sending || !ready) return;
@@ -56,7 +64,7 @@ export function FamilyNotesBoard({
     }
     setSending(true);
     setError(null);
-    const result = await onSubmit(text);
+    const result = await onSubmit(text, dateIso);
     setSending(false);
     if (!result.ok) {
       setError(result.error ?? '한마디를 남기지 못했어요.');
@@ -84,8 +92,14 @@ export function FamilyNotesBoard({
         </span>
         <h2 className="min-w-0 flex-1 text-[13px] font-extrabold tracking-tight text-slate-900">
           우리 가족 한마디
-          {notes.length > 0 ? (
-            <span className="ml-1 text-[9.5px] font-bold text-slate-400">{notes.length}</span>
+          <span
+            data-testid="notes-date"
+            className="ml-1.5 rounded-full bg-slate-100 px-1.5 py-0.5 align-middle text-[9px] font-extrabold text-slate-500"
+          >
+            {dateLabel}
+          </span>
+          {dayNotes.length > 0 ? (
+            <span className="ml-1 text-[9.5px] font-bold text-slate-400">{dayNotes.length}</span>
           ) : null}
         </h2>
         {notifyPermission === 'default' ? (
@@ -156,12 +170,12 @@ export function FamilyNotesBoard({
         </p>
       ) : null}
 
-      {ready && notes.length === 0 ? (
+      {ready && dayNotes.length === 0 ? (
         <p
           data-testid="notes-empty"
           className="mt-2 rounded-2xl border border-dashed border-slate-200 px-3 py-3 text-center text-[11px] font-semibold text-slate-400"
         >
-          아직 한마디가 없어요. 첫 소식을 남겨 보세요.
+          이 날 남긴 한마디가 아직 없어요. 첫 소식을 남겨 보세요.
         </p>
       ) : null}
 
@@ -216,7 +230,7 @@ export function FamilyNotesBoard({
         </ul>
       ) : null}
 
-      {notes.length > 4 ? (
+      {dayNotes.length > 4 ? (
         <button
           type="button"
           onClick={(event) => {
@@ -225,7 +239,7 @@ export function FamilyNotesBoard({
           }}
           className="mt-1.5 w-full rounded-xl py-1.5 text-[10.5px] font-extrabold text-slate-400 transition hover:bg-slate-50 active:scale-[0.99]"
         >
-          {showAll ? '접기' : `이전 한마디 ${notes.length - 4}개 더 보기`}
+          {showAll ? '접기' : `이 날 한마디 ${dayNotes.length - 4}개 더 보기`}
         </button>
       ) : null}
     </section>

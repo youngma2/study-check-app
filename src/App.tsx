@@ -12,7 +12,7 @@ import { CopyIcon, LockIcon, PlusIcon, UndoIcon, XIcon } from './components/icon
 import { playNoteChime } from './lib/chime';
 import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { defaultItemsForDay } from './lib/defaults';
-import { formatNoteTime } from './lib/notes';
+import { formatNoteTime, noteDate } from './lib/notes';
 import { summarize } from './lib/store';
 import { useStudy, type ActionResult } from './lib/study-context';
 import type { NewTaskInput, Task } from './lib/types';
@@ -86,6 +86,16 @@ export default function App() {
   const latestUnseenAuthor = latestUnseen
     ? study.members.find((member) => member.id === latestUnseen.author_id)
     : undefined;
+
+  /** 알림 배너를 누르면: 그 한마디가 붙은 날짜의 알림판으로 가면서 배너를 닫습니다. */
+  const openNoteDay = (noteId: string) => {
+    const note = study.notes.find((item) => item.id === noteId);
+    markNotesSeen();
+    if (!note) return;
+    const day = noteDate(note);
+    setSelectedDate(day);
+    setWeekStart(startOfWeek(fromISODate(day)));
+  };
 
   /**
    * 새 한마디가 올라오면: 알림음 + 브라우저(OS) 알림 + 짧은 진동.
@@ -442,27 +452,43 @@ export default function App() {
         {latestUnseen ? (
           <div
             data-testid="family-note-alert"
-            className="mb-3 flex items-start gap-2 rounded-[22px] bg-gradient-to-r from-indigo-600 to-violet-600 p-3 text-white shadow-lg shadow-indigo-500/25"
+            onClick={() => openNoteDay(latestUnseen.id)}
+            className="mb-3 flex w-full cursor-pointer items-start gap-2 rounded-[22px] bg-gradient-to-r from-indigo-600 to-violet-600 p-3 text-left text-white shadow-lg shadow-indigo-500/25 transition active:scale-[0.99]"
           >
-            <span aria-hidden className="mt-0.5 text-[16px]">
-              💬
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-extrabold tracking-wide text-white/75">
-                새 한마디 · {latestUnseenAuthor?.name ?? '가족'}
-              </p>
-              <p className="mt-0.5 break-words text-[12.5px] font-extrabold leading-snug">
-                {latestUnseen.content}
-              </p>
-              <p className="mt-1 text-[9.5px] font-bold text-white/60">
-                {formatNoteTime(latestUnseen.created_at)}
-              </p>
-            </div>
+            <button
+              type="button"
+              data-testid="open-note-alert"
+              aria-label={`새 한마디: ${latestUnseenAuthor?.name ?? '가족'} — ${latestUnseen.content}. 누르면 그 날 한마디로 이동해요.`}
+              onClick={(event) => {
+                event.stopPropagation();
+                openNoteDay(latestUnseen.id);
+              }}
+              className="flex min-w-0 flex-1 items-start gap-2 rounded-2xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
+            >
+              <span aria-hidden className="mt-0.5 text-[16px]">
+                💬
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[10px] font-extrabold tracking-wide text-white/75">
+                  새 한마디 · {latestUnseenAuthor?.name ?? '가족'}
+                </span>
+                <span className="mt-0.5 block break-words text-[12.5px] font-extrabold leading-snug">
+                  {latestUnseen.content}
+                </span>
+                <span className="mt-1 block text-[9.5px] font-bold text-white/60">
+                  {formatNoteTime(latestUnseen.created_at)}
+                  <span className="ml-1 text-white/50">· 눌러서 닫기</span>
+                </span>
+              </span>
+            </button>
             <button
               type="button"
               data-testid="dismiss-note-alert"
               aria-label="새 한마디 알림 닫기"
-              onClick={markNotesSeen}
+              onClick={(event) => {
+                event.stopPropagation();
+                markNotesSeen();
+              }}
               className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/15 text-white transition active:scale-90"
             >
               <XIcon className="h-3.5 w-3.5" />
@@ -522,6 +548,7 @@ export default function App() {
 
         <FamilyNotesBoard
           notes={notes}
+          dateIso={selectedDate}
           members={study.members}
           currentMemberId={currentMember.id}
           isParent={isParent}

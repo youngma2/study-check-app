@@ -16,7 +16,8 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
 
@@ -38,6 +39,11 @@ def check(name: str, cond: bool, extra: str = '') -> None:
     print(f"{'PASS' if cond else 'FAIL'}  {name}{(' — ' + extra) if extra else ''}")
     if not cond:
         failures.append(name)
+
+
+def korea_today() -> date:
+    """앱은 한국 날짜로 '오늘'을 셉니다 — 검사도 같은 날짜를 씁니다."""
+    return datetime.now(ZoneInfo('Asia/Seoul')).date()
 
 
 def wait_for_port(port: int, timeout: float = 60.0) -> bool:
@@ -93,7 +99,8 @@ def goto_day(page, target: date) -> None:
 
 
 def main() -> int:
-    today = date.today()
+    today = korea_today()
+    tomorrow = today + timedelta(days=1)
     week_start = today - timedelta(days=today.weekday())
     saturday = week_start + timedelta(days=5)
 
@@ -241,8 +248,10 @@ def main() -> int:
             check('부모 화면: 아빠 이름으로 보인다', '아빠' in parent_text, parent_text.replace('\n', ' / ')[:80])
             check('부모 화면: 독서록 검사가 보인다', '독서록 검사' in parent_text)
             check(
-                '부모 화면: 그 항목을 완료 체크할 수 있다',
-                page.locator('[data-testid="parent-boards"] [data-testid="complete-task"]').count() >= 1,
+                '부모 화면: 그 항목을 완료 체크할 수 있다 (아직 안 온 날짜면 잠긴 완료)',
+                page.locator('[data-testid="parent-boards"] [data-testid="complete-task"]').count()
+                + page.locator('[data-testid="parent-boards"] [data-testid="complete-locked"]').count()
+                >= 1,
             )
 
             # 아이 화면에서는 부모 보드가 보이지 않는다
@@ -254,10 +263,16 @@ def main() -> int:
             check('아이 화면: 아빠 항목도 보이지 않는다', '독서록 검사' not in page.inner_text('main'))
 
             # ---------------------------------------------------------------
-            # F. 💬 우리 가족 한마디 — 남기기·보기
+            # F. 💬 우리 가족 한마디 — 날짜마다 따로 붙는다
             # ---------------------------------------------------------------
             check('알림판: 칸이 있다', page.locator('[data-testid="family-notes"]').count() == 1)
-            check('알림판: 처음엔 비어 있다', page.locator('[data-testid="notes-empty"]').count() == 1)
+            check('알림판: 이 날은 처음엔 비어 있다', page.locator('[data-testid="notes-empty"]').count() == 1)
+            sat_chip = page.inner_text('[data-testid="notes-date"]')
+            check(
+                '알림판: 보고 있는 날짜(토요일)를 단다',
+                f'{saturday.month}/{saturday.day}' in sat_chip,
+                sat_chip,
+            )
             page.fill('[data-testid="note-input"]', '오늘 수학 숙제 다 했어요')
             page.click('[data-testid="note-submit"]')
             page.wait_for_selector('[data-testid="family-note"]', timeout=5000)
@@ -266,9 +281,52 @@ def main() -> int:
             check('알림판: 쓴 사람이 표시된다', '첫째' in notes_text, notes_text.replace('\n', ' / ')[:90])
             check('알림판: 빈 안내는 사라진다', page.locator('[data-testid="notes-empty"]').count() == 0)
             check('알림판: 내 글에는 지우기 버튼이 있다', page.locator('[data-testid="delete-note"]').count() >= 1)
+            saved_id = page.evaluate(
+                """({ notesKey }) => {
+                    const notes = JSON.parse(localStorage.getItem(notesKey) || '[]');
+                    const mine = notes.find((note) => note.content === '오늘 수학 숙제 다 했어요');
+                    return mine ? mine.id : '';
+                }""",
+                {'notesKey': NOTES_KEY},
+            )
+            check('알림판: 남긴 글 id 에 그 날짜가 들어간다', str(saved_id).startswith(f'n_{saturday.isoformat()}_'), str(saved_id))
+
+            # 오늘·내일 알림판은 따로 — 토요일 글은 그 두 날에 보이지 않는다
+            goto_day(page, today)
+            check('날짜 분리: 오늘 알림판은 따로 비어 있다', page.locator('[data-testid="notes-empty"]').count() == 1)
+            check(
+                '날짜 분리: 토요일 글은 오늘 알림판에 없다',
+                '오늘 수학 숙제 다 했어요' not in page.inner_text('[data-testid="family-notes"]'),
+            )
+
+            goto_day(page, tomorrow)
+            tomorrow_chip = page.inner_text('[data-testid="notes-date"]')
+            check(
+                '날짜 분리: 내일 알림판은 그 날짜를 단다',
+                f'{tomorrow.month}/{tomorrow.day}' in tomorrow_chip,
+                tomorrow_chip,
+            )
+            check('날짜 분리: 내일 알림판도 따로 비어 있다', page.locator('[data-testid="notes-empty"]').count() == 1)
+            page.fill('[data-testid="note-input"]', '내일 학원 6시 30분이에요')
+            page.click('[data-testid="note-submit"]')
+            page.wait_for_selector('[data-testid="family-note"]', timeout=5000)
+            check(
+                '날짜 분리: 내일 남긴 글은 내일 알림판에만 있다',
+                '내일 학원 6시 30분이에요' in page.inner_text('[data-testid="family-notes"]'),
+            )
+            goto_day(page, today)
+            check(
+                '날짜 분리: 내일 글은 오늘 알림판에 없다',
+                '내일 학원 6시 30분이에요' not in page.inner_text('[data-testid="family-notes"]'),
+            )
+            goto_day(page, saturday)
+            check(
+                '날짜 분리: 토요일로 돌아오면 그 날 글이 그대로',
+                '오늘 수학 숙제 다 했어요' in page.inner_text('[data-testid="family-notes"]'),
+            )
 
             # ---------------------------------------------------------------
-            # G. 다른 사람이 남긴 새 글 → 위쪽 알림 배너
+            # G. 다른 사람이 남긴 새 글 → 위쪽 알림 배너 · 누르면 그 날 알림판으로
             # ---------------------------------------------------------------
             added = page.evaluate(
                 """({ notesKey, dbKey }) => {
@@ -279,7 +337,7 @@ def main() -> int:
                       id: 'n_mom_alert',
                       family_id: familyId,
                       author_id: 'mem_mom',
-                      content: '내일 학원 6시 30분이에요',
+                      content: '저녁 7시에 데리러 가요',
                       created_at: new Date().toISOString(),
                     });
                     localStorage.setItem(notesKey, JSON.stringify(notes));
@@ -293,27 +351,80 @@ def main() -> int:
             page.wait_for_selector('[data-testid="open-profile"]')
             page.wait_for_selector('[data-testid="family-note-alert"]', timeout=6000)
             alert_text = page.inner_text('[data-testid="family-note-alert"]')
-            check('새 글: 위쪽 알림 배너가 뜬다', '내일 학원 6시 30분이에요' in alert_text)
+            check('새 글: 위쪽 알림 배너가 뜬다', '저녁 7시에 데리러 가요' in alert_text)
             check('새 글: 누가 남겼는지 나온다', '엄마' in alert_text)
-            check('새 글: 알림판에도 보인다', '내일 학원 6시 30분이에요' in page.inner_text('[data-testid="family-notes"]'))
+            check('새 글: 누르면 닫힌다고 알려 준다', '눌러서 닫기' in alert_text, alert_text.replace('\n', ' / ')[:90])
 
-            page.click('[data-testid="dismiss-note-alert"]')
-            page.wait_for_timeout(400)
-            check('배너 닫기: 사라진다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            goto_day(page, saturday)
+            check('새 글: 다른 날을 봐도 배너는 남아 있다', page.locator('[data-testid="family-note-alert"]').count() == 1)
+            check(
+                '새 글: 배너는 보던 날(토요일) 알림판에는 안 붙는다',
+                '저녁 7시에 데리러 가요' not in page.inner_text('[data-testid="family-notes"]'),
+            )
+
+            # 배너 본문을 누르면: 닫히고 그 글이 붙은 날짜(오늘)로 이동
+            page.click('[data-testid="open-note-alert"]')
+            page.wait_for_timeout(500)
+            check('배너 누르기: 배너가 닫힌다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            tapped_chip = page.inner_text('[data-testid="notes-date"]')
+            check(
+                '배너 누르기: 그 글이 붙은 날짜로 이동한다',
+                f'{today.month}/{today.day}' in tapped_chip,
+                tapped_chip,
+            )
+            check(
+                '배너 누르기: 그 날 알림판에 글이 보인다',
+                '저녁 7시에 데리러 가요' in page.inner_text('[data-testid="family-notes"]'),
+            )
 
             page.reload()
             page.wait_for_selector('[data-testid="open-profile"]')
             page.wait_for_timeout(800)
             check('배너 닫기: 다시 열어도 울리지 않는다', page.locator('[data-testid="family-note-alert"]').count() == 0)
 
+            # ✕ 버튼도 날짜를 바꾸지 않고 배너만 닫는다
+            page.evaluate(
+                """({ notesKey }) => {
+                    const notes = JSON.parse(localStorage.getItem(notesKey) || '[]');
+                    notes.unshift({
+                      id: 'n_mom_alert_x',
+                      family_id: 'fam_demo',
+                      author_id: 'mem_mom',
+                      content: '우유 사다 놓을게요',
+                      created_at: new Date().toISOString(),
+                    });
+                    localStorage.setItem(notesKey, JSON.stringify(notes));
+                }""",
+                {'notesKey': NOTES_KEY},
+            )
+            page.reload()
+            page.wait_for_selector('[data-testid="family-note-alert"]', timeout=6000)
+            goto_day(page, saturday)
+            check('✕ 준비: 다른 날을 보고 있어도 배너는 그대로', page.locator('[data-testid="family-note-alert"]').count() == 1)
+            page.click('[data-testid="dismiss-note-alert"]')
+            page.wait_for_timeout(400)
+            check('✕ 버튼: 배너가 닫힌다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            x_chip = page.inner_text('[data-testid="notes-date"]')
+            check(
+                '✕ 버튼: 보던 날짜(토요일)를 바꾸지 않는다',
+                f'{saturday.month}/{saturday.day}' in x_chip,
+                x_chip,
+            )
+
             # ---------------------------------------------------------------
-            # H. 내가 쓴 한마디 지우기
+            # H. 내가 쓴 한마디 지우기 — 그 날 알림판만 비워진다
             # ---------------------------------------------------------------
+            goto_day(page, saturday)
             before_notes = page.locator('[data-testid="family-note"]').count()
             page.locator('[data-testid="family-note"]', has_text='오늘 수학 숙제 다 했어요').locator('[data-testid="delete-note"]').first.click()
             page.wait_for_timeout(600)
             check('한마디 지우기: 개수가 줄어든다', page.locator('[data-testid="family-note"]').count() == before_notes - 1)
-            check('한마디 지우기: 엄마 글은 남는다', '내일 학원 6시 30분이에요' in page.inner_text('[data-testid="family-notes"]'))
+            check('한마디 지우기: 그 날 알림판이 다시 빈 안내', page.locator('[data-testid="notes-empty"]').count() == 1)
+            goto_day(page, tomorrow)
+            check(
+                '한마디 지우기: 다른 날(내일) 글은 그대로',
+                '내일 학원 6시 30분이에요' in page.inner_text('[data-testid="family-notes"]'),
+            )
 
             # ---------------------------------------------------------------
             # I. 📞 통화 1·2 는 아이 화면에는 안 보이고 부모 화면에만

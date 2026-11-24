@@ -15,6 +15,8 @@ import pathlib
 import socket
 import subprocess
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
 
@@ -30,6 +32,11 @@ DB_KEY = 'study-check.db.v1'  # (데모 모드는 첫 변경 때 저장되므로
 NOTES_KEY = 'study-check.notes.v1'
 
 failures: list[str] = []
+
+
+def korea_today() -> tuple[int, int]:
+    today = datetime.now(ZoneInfo('Asia/Seoul')).date()
+    return today.month, today.day
 
 
 def check(name: str, cond: bool, extra: str = '') -> None:
@@ -173,10 +180,15 @@ def main() -> int:
             page.wait_for_timeout(400)
             check('알림판 입력칸을 눌러도 배너는 그대로', page.locator('[data-testid="family-note-alert"]').count() == 1)
 
-            # 4) 닫기 버튼을 누르면 사라지고, 다시 열어도 울리지 않습니다.
-            page.click('[data-testid="dismiss-note-alert"]')
+            # 4) 배너 본문을 누르면 닫히고, 그 글이 붙은 날 알림판으로 갑니다.
+            page.click('[data-testid="open-note-alert"]')
             page.wait_for_timeout(500)
-            check('닫기 버튼: 배너가 사라진다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            check('배너 누르기: 배너가 사라진다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            board = page.inner_text('[data-testid="family-notes"]')
+            check('배너 누르기: 그 글이 그 날 알림판에 보인다', '학원 6시 30분이에요' in board, board.replace('\n', ' / ')[:90])
+            month, day = korea_today()
+            chip = page.inner_text('[data-testid="notes-date"]')
+            check('배너 누르기: 그 글이 붙은 날짜로 맞춰 준다', f'{month}/{day}' in chip, chip)
 
             page.reload()
             page.wait_for_selector('[data-testid="open-profile"]', timeout=10000)
@@ -184,6 +196,29 @@ def main() -> int:
             check('닫은 뒤 다시 열면 배너가 없다', page.locator('[data-testid="family-note-alert"]').count() == 0)
             rec2 = page.evaluate('window.__notifyRec')
             check('닫은 뒤에는 알림도 다시 울리지 않는다', len(rec2.get('sw', [])) == 0, str(len(rec2.get('sw', []))))
+
+            # 4-2) ✕ 버튼도 배너만 닫습니다(보던 날짜는 그대로).
+            page.evaluate(
+                """({ notesKey }) => {
+                    const notes = JSON.parse(localStorage.getItem(notesKey) || '[]');
+                    notes.unshift({
+                      id: 'n_mom_alert_x',
+                      family_id: 'fam_demo',
+                      author_id: 'mem_mom',
+                      content: '우유 사다 놓을게요',
+                      created_at: new Date().toISOString(),
+                    });
+                    localStorage.setItem(notesKey, JSON.stringify(notes));
+                }""",
+                {'notesKey': NOTES_KEY},
+            )
+            page.reload()
+            page.wait_for_selector('[data-testid="family-note-alert"]', timeout=10000)
+            page.click('[data-testid="dismiss-note-alert"]')
+            page.wait_for_timeout(500)
+            check('✕ 버튼: 배너가 사라진다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            chip_x = page.inner_text('[data-testid="notes-date"]')
+            check('✕ 버튼: 날짜를 바꾸지 않는다', f'{month}/{day}' in chip_x, chip_x)
 
             check('자바스크립트 오류 없음', not errors, ' / '.join(errors)[:200])
 
