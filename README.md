@@ -199,39 +199,37 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 
 ## 8. 검증 기록
 
-- `npx tsc --noEmit` — 타입 오류 0
-- `npm run build` — 성공 (`dist/` 생성, `setup.html` 자동 생성)
-- `python3 scripts/verify-sync.py` — 390×844 헤드리스 Chrome, 15개 검사 전부 통과
-  - SQL 실행 전(실제 Supabase 표 없음): 앱 정상 로드 · `가족 동기화 준비 중` 안내 · 샘플 폴백 · JS 오류 0 ·
-    항목 추가와 새로고침 유지 · `#as=mem_child1` 아이 시점 · 아이에게 삭제 버튼 없음
-  - SQL 실행 후 모양(모의 REST): 클라우드 숙제 표시 · `가족과 실시간 동기화 중` ·
-    확인 완료/삭제/완료 요청이 각각 `study_*` RPC 로 전송(`p_actor_id` 포함) · 서버 거부 시 토스트 + 원상 복구
-- `supabase/schema.sql` — 로컬 PostgreSQL(PGlite)에서 49개 검사 전부 통과
+- `npx tsc --noEmit` — 타입 오류 0 · `npm run build` 성공 (`dist/`, `setup.html` 자동 생성)
+- `supabase/schema.sql` — 로컬 PostgreSQL(PGlite) 49개 검사 전부 통과
   - 시드(가족 1 · 구성원 4 · 이번 주 숙제 39개, 공개 시드는 `첫째`·`둘째`) · 두 번 실행해도 중복 없음 · Realtime publication 3개
-  - anon: 읽기 허용 / 직접 INSERT·UPDATE·DELETE 차단 / `family_secrets` 조회·쓰기 불가
+  - anon: 읽기만 허용 / 직접 INSERT·UPDATE·DELETE 차단 / `family_secrets` 조회·쓰기 불가
   - 예전 3-인자 `study_set_task_status`·`study_delete_task` 는 남지 않음(PIN 우회 방지)
-  - 아이: 자기 숙제 추가·**바로 완료(시각 기록)** 가능, 남의 숙제 완료·되돌리기·수정·삭제 차단
-  - 부모: 완료·되돌리기(PIN)·삭제(PIN)·이름 바꾸기(PIN) 가능, PIN 없거나 틀리면 거부
-  - PIN 은 평문이 아니라 해시로만 저장, 4자리만 허용, 이미 정한 PIN 은 지금 PIN 없이 변경 불가
-- `python3 scripts/verify-parent-pin.py` — 390×844 헤드리스 Chrome(데모 빌드), 31개 검사 전부 통과
-  - 아이 시점: PIN 화면 없음 · 프로필에 부모 항목 없음 · 완료 누르면 `오전 5:40 완료` 처럼 시각 기록 ·
-    삭제·되돌리기 버튼 없음 · 이 날 공부를 내일로 복사(복사본은 `할 일`) · 공휴일(12/25 성탄절) 빨간 점·빨간 날짜·배지
-  - 부모 시점: PIN 잠금 화면이 먼저 · 잠금 전 숙제 목록 안 보임 · 두 번 입력 불일치 오류 · 관리 잠금 ·
-    틀린 PIN 거부 · 맞는 PIN 으로 열림 · 삭제·완료·되돌리기 동작 · JS 오류 0
+  - 아이: 자기 숙제 추가·바로 완료(시각 기록) 가능 / 남의 숙제 완료·되돌리기·수정·삭제 차단
+  - 부모: 완료·되돌리기(PIN)·삭제(PIN)·이름 바꾸기(PIN) / PIN 없거나 틀리면 거부
+  - PIN 은 평문이 아니라 해시로만 저장, 4자리만 허용, 이미 정한 PIN 은 지금 PIN 없이 못 바꿈
+- `python3 scripts/verify-parent-pin.py` — 390×844 헤드리스 Chrome(데모 빌드) 31개 검사 전부 통과
+  - 아이 시점: PIN 화면 없음 · 프로필에 부모 항목 없음 · 완료를 누르면 `오후 9:20 완료` 처럼 시각 기록 ·
+    삭제·되돌리기 없음 · 이 날 공부를 내일로 복사(복사본은 `할 일`) · 12/25 성탄절 빨간 점·빨간 날짜·배지
+  - 부모 시점: PIN 잠금이 먼저 · 잠금 전 목록 안 보임 · 두 번 입력 불일치 오류 · 관리 잠금 · 틀린 PIN 거부 ·
+    맞는 PIN 으로 열림 · 삭제·완료·되돌리기 · JS 오류 0
+- **라이브 검증** (실제 사이트 + 실제 Supabase DB, 390×844 헤드리스 Chrome) 28개 검사 전부 통과
+  - DB: 구성원 표시 이름이 실제 아이 이름으로 바뀜 · `study_verify_parent_pin` 이 맞는 PIN 에 true, 틀린 PIN 에 false
+  - 아이(`#as=mem_child2`): PIN 화면 없음, 프로필에 `아빠`·`엄마` 없음, 완료를 누르면 그 자리에서 완료 +
+    시각이 DB(`verified_at`)에 저장, 삭제 버튼 없음
+  - 부모(`#as=mem_dad`): PIN 잠금이 먼저, 틀린 PIN 거부, 맞는 PIN 으로만 열림, 아이 이름이 실제 이름으로 표시,
+    되돌리기가 DB 에 반영, 삭제는 PIN, `관리 잠금` 으로 다시 잠금
+  - 복사: 부모 화면에서 한 항목을 내일로 복사 → 내일 날짜에 같은 숙제가 `할 일`(완료 기록 없음)로 생김
+  - 공휴일: 12/25 성탄절 빨간 점·주간 목록·날짜 제목 배지
+  - 실시간: 부모가 추가한 숙제가 아이 화면에 새로고침 없이 등장
+  - 검증용 숙제는 모두 삭제, 숙제 수 39개 원복
 - 라이브 DB 적용 SQL(비공개)을 예전 스키마 위에서 그대로 실행하는 마이그레이션 검사 — 21개 통과
-  (부모 관리 PIN 해시 저장 · 아이 이름 변경 · 옛 확인 대기 → 완료 이전 · 두 번 실행 안전)
-- Realtime: publishable 키로 WebSocket 구독 `SUBSCRIBED` 확인 (로그인·JWT 없이 동작)
-- **라이브 실시간 동기화 검증** (`python3 scripts/verify-live-sync.py`, 실제 사이트 + 실제 DB, 브라우저 두 개)
-  - 부모(`#as=mem_dad`)가 둘째 숙제 추가 → 둘째(`#as=mem_child2`) 화면에 새로고침 없이 등장
-  - 둘째 완료 요청 → 부모 화면에 즉시 `확인 대기`
-  - 부모 확인 완료 → 둘째 화면에 즉시 `부모 확인 완료`
-  - 부모 삭제 → 둘째 화면에서 즉시 사라짐 (`replica identity full` 적용 후)
-  - 테스트 항목은 자동 삭제, 숙제 수 39개 원복 확인
-- `python3 scripts/capture.py` — 화면 흐름 스모크 테스트(부모/아이 시점, 추가·수정·삭제, 확인 완료)
-- 역할 링크: `#as=mem_dad` · `#as=mem_mom` · `#as=mem_child1` · `#as=mem_child2` 모두 해당 시점으로 전환
+  (PIN 해시 저장 · 아이 이름 변경 · 옛 확인 대기 → 완료 이전 · 두 번 실행 안전)
 
-스크린샷: `/workspace/downloads/study_app_parent.png`, `/workspace/downloads/study_app_child.png`
-(전체 화면: `..._parent_full.png`, `..._child_full.png`)
+> `scripts/verify-sync.py` · `scripts/verify-live-sync.py` · `scripts/capture.py` 는 **예전 두 단계(완료 요청 → 확인 완료) 흐름** 기준의 기록용 스크립트입니다.
+> 지금 흐름(바로 완료 + PIN)의 검증은 위 `verify-parent-pin.py` 와 라이브 검증이 담당합니다.
+
+스크린샷: `/workspace/downloads/study_app_child_completed.png`(아이 완료 시각), `study_app_parent_pin.png`(PIN 잠금),
+`study_app_parent_unlocked.png`(부모 화면), `study_app_copy_sheet.png`(복사 시트), `study_app_holiday.png`(성탄절 빨간 표시)
 
 ## 9. 다음에 붙이면 좋은 것
 
