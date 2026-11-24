@@ -168,6 +168,17 @@ export function canDeleteTask(actor: Member): boolean {
   return actor.role === 'parent';
 }
 
+/** 완료 체크: 부모는 아무 숙제나, 아이는 자기 숙제만. (체크한 시각이 기록됩니다) */
+export function canCompleteTask(actor: Member, task: Task): boolean {
+  return actor.role === 'parent' || task.member_id === actor.id;
+}
+
+/** 완료 되돌리기: 부모만 (DB 에서는 부모 관리 PIN 까지 확인) */
+export function canRevertTask(actor: Member): boolean {
+  return actor.role === 'parent';
+}
+
+/** 예전 이름 — 완료 체크는 이제 아이도 할 수 있어 `canCompleteTask` 를 씁니다. */
 export function canVerifyTask(actor: Member): boolean {
   return actor.role === 'parent';
 }
@@ -267,8 +278,8 @@ export function editTask(db: StudyDB, actor: Member, taskId: string, patch: Task
 
 /**
  * 상태 변경은 역할에 따라 다릅니다.
- * - 부모: 확인 완료 / 되돌리기 / 직접 완료 처리 모두 가능
- * - 아이: 자기 항목을 '확인 대기'로 올리거나 요청을 취소만 가능 (스스로 '확인 완료' 불가)
+ * - 완료 체크(verified): 부모는 아무 숙제나, 아이는 자기 숙제만. 누가·언제 완료했는지 남깁니다.
+ * - 되돌리기: 완료된 숙제는 부모만 풀 수 있습니다. (DB 에서는 부모 관리 PIN 도 확인)
  */
 export function changeTaskStatus(
   db: StudyDB,
@@ -279,10 +290,8 @@ export function changeTaskStatus(
   const task = requireTask(db, taskId);
   assertSameFamily(actor, task);
 
-  const isOwn = task.member_id === actor.id;
-
   if (status === 'verified') {
-    if (!canVerifyTask(actor)) throw new PermissionError('부모님만 확인 완료할 수 있어요.');
+    if (!canCompleteTask(actor, task)) throw new PermissionError('내 숙제만 완료할 수 있어요.');
     if (task.status === 'verified') return db;
     return replaceTask(db, {
       ...task,
@@ -292,18 +301,34 @@ export function changeTaskStatus(
     });
   }
 
-  if (status === 'pending_verification') {
-    if (actor.role === 'child' && !isOwn) {
-      throw new PermissionError('내 숙제만 완료 요청할 수 있어요.');
-    }
-    if (task.status === 'pending_verification') return db;
+  // 완료를 푸는 쪽은 부모만
+  if (task.status === 'verified') {
+    if (!canRevertTask(actor)) throw new PermissionError('완료를 되돌리는 건 부모님만 할 수 있어요.');
     return replaceTask(db, { ...task, status, verified_by: null, verified_at: null });
   }
 
-  if (actor.role === 'child' && !isOwn) {
-    throw new PermissionError('내 숙제만 바꿀 수 있어요.');
+  // 완료 전 항목(레거시 '확인 대기' 포함)의 상태 바꾸기: 부모 또는 자기 것
+  if (actor.role !== 'parent' && task.member_id !== actor.id) {
+    throw new PermissionError('내 공부만 바꿀 수 있어요.');
   }
-  return replaceTask(db, { ...task, status: 'todo', verified_by: null, verified_at: null });
+  return replaceTask(db, { ...task, status, verified_by: null, verified_at: null });
+}
+
+/** 구성원 이름 바꾸기: 부모만. (아이디는 그대로라 링크·숙제가 유지됩니다) */
+export function renameMember(db: StudyDB, actor: Member, memberId: string, name: string): StudyDB {
+  if (actor.role !== 'parent') throw new PermissionError('이름 바꾸기는 부모님만 할 수 있어요.');
+  const target = memberById(db, memberId);
+  if (!target || target.family_id !== actor.family_id) {
+    throw new PermissionError('같은 가족 구성원의 이름만 바꿀 수 있어요.');
+  }
+  const trimmed = name.trim();
+  if (trimmed.length < 1 || trimmed.length > 30) {
+    throw new PermissionError('이름은 1~30자로 적어 주세요.');
+  }
+  return {
+    ...db,
+    members: db.members.map((member) => (member.id === memberId ? { ...member, name: trimmed } : member)),
+  };
 }
 
 export function deleteTask(db: StudyDB, actor: Member, taskId: string): StudyDB {

@@ -212,6 +212,8 @@ export class SupabaseStorageAdapter implements StorageAdapter {
           p_actor_id: change.actorId,
           p_task_id: change.task.id,
           p_status: change.status,
+          // 완료 되돌리기(부모 전용)일 때 서버가 PIN 을 확인합니다. 그 밖에는 null 이라 무시됩니다.
+          p_pin: change.fromStatus === 'verified' ? change.pin ?? null : null,
         });
         if (error) throw toUserError(error);
         return;
@@ -220,6 +222,8 @@ export class SupabaseStorageAdapter implements StorageAdapter {
         const { error } = await this.client.rpc('study_delete_task', {
           p_actor_id: change.actorId,
           p_task_id: change.taskId,
+          // 삭제는 부모 + 부모 관리 PIN 이 있어야 합니다.
+          p_pin: change.pin ?? null,
         });
         if (error) throw toUserError(error);
         return;
@@ -229,6 +233,29 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       default:
         return;
     }
+  }
+
+  /** 부모 관리 PIN 확인 — 서버(family_secrets 의 bcrypt 해시)에서만 판단합니다. */
+  async verifyParentPin(familyId: string, pin: string): Promise<boolean> {
+    const { data, error } = await this.client.rpc('study_verify_parent_pin', {
+      p_family_id: familyId,
+      p_pin: pin,
+    });
+    if (error) throw toUserError(error);
+    return data === true;
+  }
+
+  /** 구성원 이름 바꾸기 — 부모 + PIN. (아이디는 그대로라 링크·숙제가 유지됩니다) */
+  async renameMember(actorId: string, memberId: string, name: string, pin: string): Promise<Member> {
+    const { data, error } = await this.client.rpc('study_rename_member', {
+      p_actor_id: actorId,
+      p_member_id: memberId,
+      p_name: name,
+      p_pin: pin,
+    });
+    if (error) throw toUserError(error);
+    if (!data) throw new Error('이름을 바꾸지 못했어요.');
+    return toMember(data as MemberRow);
   }
 
   /** 가족 데이터 변경을 실시간으로 받습니다. */

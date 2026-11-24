@@ -13,6 +13,7 @@ import {
   loadCloudCache,
   loadCurrentMemberId,
   parentsOf,
+  renameMember as renameMemberPure,
   saveCloudCache,
   saveCurrentMemberId,
   sortTasks,
@@ -20,6 +21,15 @@ import {
   type TaskPatch,
   type TaskSummary,
 } from './store';
+import {
+  clearSessionPin,
+  hasLocalPin,
+  isPinFormat,
+  readSessionPin,
+  setLocalPin,
+  verifyLocalPin,
+  writeSessionPin,
+} from './pin';
 import { LocalStorageAdapter, type RemoteEvent, type RealtimeState, type StorageChange, type StorageKind } from './storage';
 import { StorageSetupError, createSupabaseAdapter } from './supabase';
 import type { Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
@@ -30,6 +40,11 @@ export interface ActionResult {
 }
 
 export type SyncState = 'local' | 'syncing' | 'synced' | 'setup' | 'error';
+
+export interface CopyResult extends ActionResult {
+  created: number;
+  skipped: number;
+}
 
 export interface StudyContextValue {
   db: StudyDB;
@@ -42,6 +57,13 @@ export interface StudyContextValue {
   storageKind: StorageKind;
   syncState: SyncState;
   realtimeState: RealtimeState;
+  /** 부모 관리 PIN 잠금이 풀렸는지 (이번 탭에서) */
+  parentUnlocked: boolean;
+  /** 이 기기(데모)에서 처음 PIN 을 정해야 하는지 */
+  parentPinSetupRequired: boolean;
+  unlockParent: (pin: string) => Promise<ActionResult>;
+  setParentPin: (pin: string) => Promise<ActionResult>;
+  lockParent: () => void;
   setCurrentMember: (memberId: string) => void;
   tasksFor: (memberId: string, dateIso: string) => Task[];
   summaryFor: (memberId: string, dateIso: string) => TaskSummary;
@@ -49,6 +71,8 @@ export interface StudyContextValue {
   editTask: (taskId: string, patch: TaskPatch) => Promise<ActionResult>;
   setStatus: (taskId: string, status: TaskStatus) => Promise<ActionResult>;
   removeTask: (taskId: string) => Promise<ActionResult>;
+  copyTasks: (taskIds: string[], dates: string[]) => Promise<CopyResult>;
+  renameMember: (memberId: string, name: string) => Promise<ActionResult>;
   resetDemo: () => Promise<ActionResult>;
 }
 
@@ -76,19 +100,28 @@ function messageOf(error: unknown): string {
 /** 두 스냅샷을 비교해 '이번에 바뀐 한 건'을 서버에 보낼 형태로 만듭니다. */
 function changeBetween(prev: StudyDB, next: StudyDB, actorId: string): StorageChange | null {
   const before = new Map(prev.tasks.map((task) => [task.id, task] as const));
+  let added: Task | null = null;
+  let changed: StorageChange | null = null;
+
   for (const task of next.tasks) {
     const old = before.get(task.id);
     before.delete(task.id);
-    if (!old) return { type: 'add', actorId, task };
-    if (old !== task) {
-      return old.status !== task.status
-        ? { type: 'status', actorId, task, status: task.status }
-        : { type: 'update', actorId, task };
+    if (!old) {
+      added = added ?? task;
+      continue;
+    }
+    if (old !== task && !changed) {
+      changed =
+        old.status !== task.status
+          ? { type: 'status', actorId, task, status: task.status, fromStatus: old.status }
+          : { type: 'update', actorId, task };
     }
   }
+
+  if (added) return { type: 'add', actorId, task: added };
   const removed = before.keys().next();
   if (!removed.done) return { type: 'delete', actorId, taskId: removed.value };
-  return null;
+  return changed;
 }
 
 export function StudyProvider({ children }: { children: ReactNode }) {
@@ -116,6 +149,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   }, []);
   const [realtimeState, setRealtimeState] = useState<RealtimeState>('off');
   const [attempt, setAttempt] = useState(0);
+
+  // 부모 관리 PIN — 잠금을 푼 PIN 은 이번 탭(sessionStorage)에만 둡니다.
+  const [sessionPin, setSessionPinState] = useState<string | null>(() => readSessionPin());
+  const sessionPinRef = useRef<string | null>(sessionPin);
+  sessionPinRef.current = sessionPin;
+  const [localPinReady, setLocalPinReady] = useState<boolean>(() => hasLocalPin());
 
   useEffect(() => {
     saveCurrentMemberId(currentMemberId);
@@ -301,6 +340,16 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       setDb(next);
       if (!change) return { ok: true };
 
+      // 완료 되돌리기·삭제는 부모 관리 PIN 이 필요한 동작입니다. 이번 세션의 PIN 을 함께 보냅니다.
+      if (change.type === 'delete' || (change.type === 'status' && change.fromStatus === 'verified')) {
+        if (!sessionPinRef.current) {
+          dbRef.current = current;
+          setDb(current);
+          return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
+        }
+        change.pin = sessionPinRef.current;
+      }
+
       const adapter = modeRef.current === 'supabase' ? cloud ?? local : local;
       try {
         await adapter.save(next, change);
@@ -365,6 +414,144 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     setCurrentMemberIdState(memberId);
   }, []);
 
+  /** 부모 관리 PIN 잠금 풀기 — 클라우드면 서버(bcrypt 해시)가, 데모면 이 기기가 확인합니다. */
+  const unlockParent = useCallback(
+    async (pin: string): Promise<ActionResult> => {
+      if (!isPinFormat(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
+
+      if (modeRef.current === 'supabase' && cloud) {
+        const familyId = dbRef.current.families[0]?.id;
+        if (!familyId) return { ok: false, error: '가족 정보를 불러오는 중이에요. 잠시 뒤 다시 해 주세요.' };
+        try {
+          const valid = await cloud.verifyParentPin(familyId, pin);
+          if (!valid) return { ok: false, error: 'PIN이 맞지 않아요. 다시 입력해 주세요.' };
+        } catch (error) {
+          return { ok: false, error: messageOf(error) };
+        }
+      } else {
+        if (!hasLocalPin()) return { ok: false, error: '이 기기에는 아직 부모 관리 PIN이 없어요.' };
+        try {
+          const valid = await verifyLocalPin(pin);
+          if (!valid) return { ok: false, error: 'PIN이 맞지 않아요. 다시 입력해 주세요.' };
+        } catch {
+          return { ok: false, error: '이 기기에서는 PIN을 확인할 수 없어요.' };
+        }
+      }
+
+      writeSessionPin(pin);
+      setSessionPinState(pin);
+      return { ok: true };
+    },
+    [cloud],
+  );
+
+  /** 기기 저장(데모) 모드에서 처음 PIN 정하기 */
+  const setParentPin = useCallback(async (pin: string): Promise<ActionResult> => {
+    if (!isPinFormat(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
+    try {
+      await setLocalPin(pin);
+    } catch {
+      return { ok: false, error: '이 기기에서는 PIN을 저장할 수 없어요.' };
+    }
+    setLocalPinReady(true);
+    writeSessionPin(pin);
+    setSessionPinState(pin);
+    return { ok: true };
+  }, []);
+
+  /** 관리 잠금 — 이번 탭의 PIN 을 지웁니다. */
+  const lockParent = useCallback(() => {
+    clearSessionPin();
+    setSessionPinState(null);
+  }, []);
+
+  /**
+   * 공부 복사·붙여넣기: 고른 항목을 다른 날짜들로 '할 일' 상태로 새로 만듭니다.
+   * 같은 날 같은 숙제가 이미 있으면 건너뜁니다. (한 건씩 저장하므로 실시간 동기화도 그대로 됩니다)
+   */
+  const copyTasks = useCallback(
+    async (taskIds: string[], dates: string[]): Promise<CopyResult> => {
+      if (dates.length === 0) return { ok: false, created: 0, skipped: 0, error: '붙여넣을 날짜를 골라 주세요.' };
+      const sources = dbRef.current.tasks.filter((task) => taskIds.includes(task.id));
+      if (sources.length === 0) return { ok: false, created: 0, skipped: 0, error: '복사할 항목을 찾지 못했어요.' };
+
+      let created = 0;
+      let skipped = 0;
+      let firstError: string | undefined;
+
+      for (const date of dates) {
+        for (const source of sources) {
+          const duplicated = dbRef.current.tasks.some(
+            (task) =>
+              task.member_id === source.member_id &&
+              task.due_date === date &&
+              task.title === source.title &&
+              task.subject === source.subject,
+          );
+          if (duplicated) {
+            skipped += 1;
+            continue;
+          }
+          const result = await addTask({
+            member_id: source.member_id,
+            title: source.title,
+            subject: source.subject,
+            due_date: date,
+            note: source.note,
+          });
+          if (result.ok) created += 1;
+          else firstError = firstError ?? result.error;
+        }
+      }
+
+      return { ok: created > 0 || skipped > 0, created, skipped, error: firstError };
+    },
+    [addTask],
+  );
+
+  /** 구성원 이름 바꾸기 — 부모 + PIN. */
+  const renameMember = useCallback(
+    async (memberId: string, name: string): Promise<ActionResult> => {
+      const current = dbRef.current;
+      const actor =
+        current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+
+      const pin = sessionPinRef.current;
+      if (!pin) return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
+
+      let next: StudyDB;
+      try {
+        next = renameMemberPure(current, actor, memberId, name);
+      } catch (error) {
+        return { ok: false, error: messageOf(error) };
+      }
+
+      const renamed = next.members.find((member) => member.id === memberId);
+      if (!renamed) return { ok: false, error: '구성원을 찾지 못했어요.' };
+
+      if (modeRef.current === 'supabase' && cloud?.renameMember) {
+        try {
+          await cloud.renameMember(actor.id, memberId, renamed.name, pin);
+        } catch (error) {
+          return { ok: false, error: messageOf(error) };
+        }
+        saveCloudCache(next);
+      } else {
+        try {
+          await local.save(next, { type: 'reset', actorId: actor.id });
+        } catch {
+          return { ok: false, error: '이 기기에 저장하지 못했어요.' };
+        }
+      }
+
+      dbRef.current = next;
+      setDb(next);
+      return { ok: true };
+    },
+    [cloud, local],
+  );
+
   const currentMember = db.members.find((member) => member.id === currentMemberId) ?? db.members[0];
 
   const tasksFor = useCallback(
@@ -391,6 +578,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       storageKind: mode,
       syncState,
       realtimeState,
+      parentUnlocked: sessionPin !== null,
+      parentPinSetupRequired: mode === 'local' && !localPinReady && syncState !== 'syncing',
+      unlockParent,
+      setParentPin,
+      lockParent,
       setCurrentMember,
       tasksFor,
       summaryFor,
@@ -398,6 +590,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       editTask,
       setStatus,
       removeTask,
+      copyTasks,
+      renameMember,
       resetDemo,
     };
   }, [
@@ -406,6 +600,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     mode,
     syncState,
     realtimeState,
+    sessionPin,
+    localPinReady,
+    unlockParent,
+    setParentPin,
+    lockParent,
     setCurrentMember,
     tasksFor,
     summaryFor,
@@ -413,6 +612,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     editTask,
     setStatus,
     removeTask,
+    copyTasks,
+    renameMember,
     resetDemo,
   ]);
 

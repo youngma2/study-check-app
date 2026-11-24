@@ -1,4 +1,4 @@
-import { formatDayTitle, relativeDayLabel } from '../lib/date';
+import { formatDayTitle, holidayName, relativeDayLabel } from '../lib/date';
 import type { TaskSummary } from '../lib/store';
 import { cx } from '../lib/cx';
 
@@ -59,13 +59,19 @@ function StatChip({ label, value, dot, highlight }: { label: string; value: numb
 
 export function DayOverview({ dateIso, summary }: { dateIso: string; summary: TaskSummary }) {
   const label = relativeDayLabel(dateIso);
+  const holiday = holidayName(dateIso);
 
   return (
     <>
       <section className="mt-4 flex items-center gap-3 px-1">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <h2 className="text-[17px] font-extrabold tracking-tight text-slate-900">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <h2
+              className={cx(
+                'text-[17px] font-extrabold tracking-tight',
+                holiday ? 'text-rose-600' : 'text-slate-900',
+              )}
+            >
               {formatDayTitle(dateIso)}
             </h2>
             {label ? (
@@ -73,11 +79,19 @@ export function DayOverview({ dateIso, summary }: { dateIso: string; summary: Ta
                 {label}
               </span>
             ) : null}
+            {holiday ? (
+              <span
+                data-testid="day-holiday"
+                className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[9.5px] font-extrabold text-rose-600 ring-1 ring-rose-200/70"
+              >
+                {holiday}
+              </span>
+            ) : null}
           </div>
           <p className="mt-1 text-[11px] font-medium text-slate-500">
             {summary.total === 0
               ? '아직 등록된 공부가 없어요'
-              : `전체 ${summary.total}개 · 확인 완료 ${summary.verified}개`}
+              : `전체 ${summary.total}개 · 완료 ${summary.verified}개`}
             {summary.pending > 0 ? (
               <span className="ml-1 font-bold text-amber-600">· 확인 대기 {summary.pending}개</span>
             ) : null}
@@ -86,10 +100,12 @@ export function DayOverview({ dateIso, summary }: { dateIso: string; summary: Ta
         <ProgressRing ratio={summary.ratio} />
       </section>
 
-      <section className="mt-2.5 grid grid-cols-3 gap-1.5">
+      <section className={cx('mt-2.5 grid gap-1.5', summary.pending > 0 ? 'grid-cols-3' : 'grid-cols-2')}>
         <StatChip label="할 일" value={summary.todo} dot="bg-slate-300" />
-        <StatChip label="확인 대기" value={summary.pending} dot="bg-amber-400" highlight={summary.pending > 0} />
-        <StatChip label="확인 완료" value={summary.verified} dot="bg-emerald-400" />
+        {summary.pending > 0 ? (
+          <StatChip label="확인 대기" value={summary.pending} dot="bg-amber-400" highlight />
+        ) : null}
+        <StatChip label="완료" value={summary.verified} dot="bg-emerald-400" />
       </section>
     </>
   );

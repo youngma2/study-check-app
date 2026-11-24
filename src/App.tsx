@@ -2,18 +2,37 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { AddTaskSheet } from './components/AddTaskSheet';
 import { ChildBoard } from './components/ChildBoard';
+import { CopySheet } from './components/CopySheet';
 import { DayOverview } from './components/DayOverview';
+import { ParentPinGate } from './components/ParentPinGate';
 import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
-import { PlusIcon, LockIcon } from './components/icons';
-import { addDays, fromISODate, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
-import { canDeleteTask, canEditTask, canVerifyTask, summarize } from './lib/store';
+import { CopyIcon, LockIcon, PlusIcon, UndoIcon } from './components/icons';
+import { addDays, formatTimeKo, fromISODate, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
+import { summarize } from './lib/store';
 import { useStudy, type ActionResult } from './lib/study-context';
 import type { NewTaskInput, Task } from './lib/types';
 
 export default function App() {
   const study = useStudy();
-  const { currentMember, children, isParent, tasksFor, addTask, editTask, setStatus, removeTask, resetDemo } = study;
+  const {
+    currentMember,
+    children,
+    isParent,
+    parentUnlocked,
+    parentPinSetupRequired,
+    unlockParent,
+    setParentPin,
+    lockParent,
+    copyTasks,
+    renameMember,
+    tasksFor,
+    addTask,
+    editTask,
+    setStatus,
+    removeTask,
+    resetDemo,
+  } = study;
 
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date()));
   const [selectedDate, setSelectedDate] = useState<string>(() => todayISO());
@@ -21,6 +40,7 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [formMemberId, setFormMemberId] = useState<string>(currentMember.id);
+  const [copySources, setCopySources] = useState<Task[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const notify = useCallback((message: string) => setToast(message), []);
@@ -38,6 +58,7 @@ export default function App() {
   );
 
   const weekDays = useMemo(() => weekDates(weekStart), [weekStart]);
+  const weekDatesIso = useMemo(() => weekDays.map((day) => toISODate(day)), [weekDays]);
 
   const progress = useMemo(() => {
     const map: Record<string, DayProgress> = {};
@@ -95,14 +116,15 @@ export default function App() {
     return result;
   };
 
-  const handleRequest = async (task: Task) => {
-    const result = await setStatus(task.id, 'pending_verification');
-    notify(result.ok ? '부모님께 완료 요청을 보냈어요' : result.error ?? '요청하지 못했어요');
-  };
-
-  const handleVerify = async (task: Task) => {
+  /** 완료 체크 — 누르는 순간 완료로 기록되고, 그 시각이 카드에 남습니다. */
+  const handleComplete = async (task: Task) => {
     const result = await setStatus(task.id, 'verified');
-    notify(result.ok ? '확인 완료! 잘했어요 🎉' : result.error ?? '확인하지 못했어요');
+    if (result.ok) {
+      const time = formatTimeKo(new Date().toISOString());
+      notify(`완료! ${time} 완료로 기록했어요`);
+      return;
+    }
+    notify(result.error ?? '완료하지 못했어요');
   };
 
   const handleRevert = async (task: Task) => {
@@ -116,13 +138,63 @@ export default function App() {
     notify(result.ok ? '삭제했어요' : result.error ?? '삭제하지 못했어요');
   };
 
-  const canVerify = canVerifyTask(currentMember);
-  const canEdit = canEditTask(currentMember);
-  const canDelete = canDeleteTask(currentMember);
+  const openCopyForDay = () => {
+    if (dayTasks.length === 0) {
+      notify('이 날은 복사할 공부가 없어요');
+      return;
+    }
+    setCopySources(dayTasks);
+  };
+
+  const openCopyForTask = (task: Task) => setCopySources([task]);
+
+  /** 어제 공부를 오늘(보고 있는 날)로 한 번에 가져옵니다. */
+  const handleCopyYesterday = async () => {
+    const yesterday = toISODate(addDays(fromISODate(selectedDate), -1));
+    const sources = visibleMembers.flatMap((member) => tasksFor(member.id, yesterday));
+    if (sources.length === 0) {
+      notify('어제는 복사할 공부가 없었어요');
+      return;
+    }
+    const result = await copyTasks(
+      sources.map((task) => task.id),
+      [selectedDate],
+    );
+    if (!result.ok) {
+      notify(result.error ?? '복사하지 못했어요');
+      return;
+    }
+    const parts = [`어제 공부 ${result.created}개를 가져왔어요`];
+    if (result.skipped > 0) parts.push(`이미 있어서 ${result.skipped}개는 건너뛰었어요`);
+    notify(parts.join(' · '));
+  };
+
+  const parentLocked = isParent && !parentUnlocked;
 
   const defaultAddMemberId = isParent
     ? (visibleMembers[0]?.id ?? currentMember.id)
     : currentMember.id;
+
+  if (parentLocked) {
+    return (
+      <div className="min-h-screen bg-[#f5f6fa]">
+        <ParentPinGate
+          familyName={study.familyName}
+          mode={parentPinSetupRequired ? 'setup' : 'unlock'}
+          children={study.children}
+          onSubmit={parentPinSetupRequired ? setParentPin : unlockParent}
+          onSwitchChild={study.setCurrentMember}
+        />
+        {toast ? (
+          <div className="pointer-events-none fixed inset-x-0 bottom-8 z-40 flex justify-center px-6">
+            <div className="animate-toast-in max-w-full truncate rounded-full bg-slate-900/90 px-4 py-2.5 text-[11.5px] font-bold text-white shadow-lg">
+              {toast}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f5f6fa]">
@@ -147,6 +219,27 @@ export default function App() {
         />
 
         <DayOverview dateIso={selectedDate} summary={daySummary} />
+
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <button
+            type="button"
+            data-testid="open-copy-day"
+            onClick={openCopyForDay}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-white py-2 text-[11px] font-extrabold text-slate-600 ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+          >
+            <CopyIcon className="h-3.5 w-3.5 text-indigo-500" />
+            이 날 공부 복사
+          </button>
+          <button
+            type="button"
+            data-testid="copy-yesterday"
+            onClick={handleCopyYesterday}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-white py-2 text-[11px] font-extrabold text-slate-600 ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+          >
+            <UndoIcon className="h-3.5 w-3.5 text-slate-400" />
+            어제 것 가져오기
+          </button>
+        </div>
 
         {study.syncState === 'setup' ? (
           <div
@@ -176,8 +269,8 @@ export default function App() {
             <LockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
             <p className="text-[10.5px] font-semibold leading-relaxed text-amber-800">
               <b className="font-extrabold">{currentMember.name}</b> 시점이에요. 공부를 추가하고{' '}
-              <b className="font-extrabold">완료 요청</b>은 할 수 있지만, 항목 삭제와 최종{' '}
-              <b className="font-extrabold">확인 완료</b>는 부모님만 할 수 있어요.
+              <b className="font-extrabold">완료</b>를 누르면 바로 완료로 기록돼요. 항목{' '}
+              <b className="font-extrabold">삭제·되돌리기</b>는 부모님만 할 수 있어요.
             </p>
           </div>
         ) : null}
@@ -189,23 +282,22 @@ export default function App() {
               member={member}
               tasks={tasksFor(member.id, selectedDate)}
               canAdd={isParent || member.id === currentMember.id}
-              canVerify={canVerify}
-              canEdit={canEdit}
-              canDelete={canDelete}
+              canComplete={isParent || member.id === currentMember.id}
+              canManage={isParent}
               onAdd={() => openAdd(member.id)}
-              onRequest={handleRequest}
-              onVerify={handleVerify}
+              onComplete={handleComplete}
               onRevert={handleRevert}
               onEdit={openEdit}
               onDelete={handleDelete}
+              onCopy={openCopyForTask}
             />
           ))}
         </div>
 
         <p className="mt-5 px-2 text-center text-[10px] font-medium leading-relaxed text-slate-400">
-          아이는 항목을 지울 수 없고, 확인 완료는 부모님만 누를 수 있어요.
-          <br />
-          상단 이름을 눌러 아빠 · 엄마 · 첫째 · 둘째 시점을 바꿔 볼 수 있어요.
+          {isParent
+            ? '완료를 누르면 그 시각이 기록돼요. 되돌리기·삭제는 부모 관리 PIN으로 잠겨 있어요.'
+            : '완료를 누르면 그 시각이 바로 기록돼요. 삭제·되돌리기는 부모님만 할 수 있어요.'}
         </p>
       </main>
 
@@ -237,12 +329,26 @@ export default function App() {
         onSave={handleSave}
       />
 
+      <CopySheet
+        open={copySources !== null}
+        onClose={() => setCopySources(null)}
+        sources={copySources ?? []}
+        members={isParent ? children : children.filter((member) => member.id === currentMember.id)}
+        dates={weekDatesIso}
+        selectedDate={selectedDate}
+        onCopy={copyTasks}
+        onDone={notify}
+      />
+
       <ProfileSheet
         open={profileOpen}
         onClose={() => setProfileOpen(false)}
         members={study.members}
         currentMemberId={currentMember.id}
+        viewerIsParent={isParent}
         onSelect={study.setCurrentMember}
+        onLock={lockParent}
+        onRename={renameMember}
         onResetDemo={async () => {
           const result = await resetDemo();
           notify(result.ok ? '샘플 데이터로 되돌렸어요' : result.error ?? '초기화하지 못했어요');

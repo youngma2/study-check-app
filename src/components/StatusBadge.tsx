@@ -8,7 +8,7 @@ const STYLES: Record<TaskStatus, { label: string; className: string }> = {
     label: '확인 대기',
     className: 'bg-amber-50 text-amber-600 ring-amber-200/80',
   },
-  verified: { label: '부모 확인 완료', className: 'bg-emerald-50 text-emerald-600 ring-emerald-200/80' },
+  verified: { label: '완료', className: 'bg-emerald-50 text-emerald-600 ring-emerald-200/80' },
 };
 
 export function StatusBadge({ status }: { status: TaskStatus }) {

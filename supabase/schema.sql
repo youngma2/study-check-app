@@ -12,20 +12,44 @@
 --       엄마   https://youngma2.github.io/study-check-app/#as=mem_mom
 --       첫째   https://youngma2.github.io/study-check-app/#as=mem_child1
 --       둘째   https://youngma2.github.io/study-check-app/#as=mem_child2
---   · 항목 추가/완료 요청/확인 완료가 폰끼리 실시간으로 반영됩니다(새로고침 없음).
+--   · 숙제 체크(완료)·추가·삭제가 폰끼리 실시간으로 반영됩니다(새로고침 없음).
 --
 -- 권한 (앱 + DB 이중으로 막습니다)
---   부모(아빠·엄마): 추가·수정·삭제·확인 완료
---   아이(첫째·둘째): 자기 숙제 추가, 완료 요청/요청 취소만. 삭제·수정·확인 완료 불가
+--   부모(아빠·엄마): 추가·수정·삭제·완료 되돌리기 — 부모 관리 PIN 필요
+--   아이(첫째·둘째): 자기 숙제 추가, 자기 숙제 완료 체크(시간 기록). 삭제·수정·되돌리기 불가
+--
+-- 부모 관리 PIN
+--   · 4자리 PIN 은 이 파일에 적지 않습니다(공개 저장소). 아래 5번 주석을 보고
+--     `study_set_parent_pin` 으로 한 번만 정하면 됩니다.
+--   · 저장은 public.family_secrets 에 bcrypt 해시(crypt + gen_salt('bf'))로만 하고,
+--     RLS 정책을 하나도 만들지 않아 anon 키로는 읽을 수 없습니다.
 --
 -- 구조
 --   families ─┬─ family_members
---             └─ tasks
+--             ├─ tasks
+--             └─ family_secrets (부모 관리 PIN 해시 · 앱에서 직접 읽지 않음)
 --   읽기는 누구나(가족 링크를 아는 기기), 쓰기는 아래 RPC 로만 가능하게 해 두고
---   RPC 안에서 역할(parent/child)을 검사합니다.
+--   RPC 안에서 역할(parent/child)과 PIN 을 검사합니다.
 -- ============================================================================
 
 -- (식별자 생성은 PostgreSQL 13+ 기본 함수인 gen_random_uuid() 를 씁니다.)
+
+-- ----------------------------------------------------------------------------
+-- 0. 확장 — PIN 해시용 pgcrypto (bcrypt)
+-- ----------------------------------------------------------------------------
+
+create schema if not exists extensions;
+
+do $$
+begin
+  -- Supabase 는 보통 extensions 스키마에 이미 들어 있습니다(그러면 그냥 넘어갑니다).
+  create extension if not exists pgcrypto with schema extensions;
+exception
+  when others then
+    -- 로컬 테스트용 PostgreSQL 에 pgcrypto 가 없어도 나머지 스키마는 그대로 만듭니다.
+    raise notice 'pgcrypto 확장을 설치하지 못했습니다: %', sqlerrm;
+end;
+$$;
 
 -- ----------------------------------------------------------------------------
 -- 1. 테이블
@@ -61,9 +85,16 @@ create table if not exists public.tasks (
   note        text,
   created_by  text references public.family_members (id) on delete set null,
   verified_by text references public.family_members (id) on delete set null,
-  verified_at timestamptz,
+  verified_at timestamptz, -- 완료 체크한 시각 (앱이 '오후 8:42 완료' 로 보여 줍니다)
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
+);
+
+-- 부모 관리 PIN 해시. 앱은 이 표를 직접 읽지 않고 RPC(study_verify_parent_pin)로만 확인합니다.
+create table if not exists public.family_secrets (
+  family_id       text primary key references public.families (id) on delete cascade,
+  parent_pin_hash text not null,
+  updated_at      timestamptz not null default now()
 );
 
 create index if not exists tasks_family_due_idx on public.tasks (family_id, due_date);
@@ -79,11 +110,13 @@ alter table public.family_members replica identity full;
 
 -- ----------------------------------------------------------------------------
 -- 2. RLS — 읽기는 열고, 직접 쓰기는 막습니다(쓰기는 3번의 RPC 로만).
+--    family_secrets 는 정책을 하나도 만들지 않습니다 → anon 은 읽을 수 없습니다.
 -- ----------------------------------------------------------------------------
 
 alter table public.families       enable row level security;
 alter table public.family_members enable row level security;
 alter table public.tasks          enable row level security;
+alter table public.family_secrets enable row level security;
 
 drop policy if exists study_read_families on public.families;
 create policy study_read_families on public.families
@@ -102,9 +135,105 @@ grant select on public.families, public.family_members, public.tasks to anon, au
 revoke insert, update, delete on public.families, public.family_members, public.tasks
   from anon, authenticated;
 
+-- PIN 해시 표: 권한 자체를 회수합니다(정책도 없음). RPC 안에서만 쓰입니다.
+revoke all on public.family_secrets from anon, authenticated;
+revoke all on public.family_secrets from public;
+
 -- ----------------------------------------------------------------------------
 -- 3. RPC — 앱이 쓰는 유일한 쓰기 통로. actor(누가)를 받아 역할을 검사합니다.
 -- ----------------------------------------------------------------------------
+
+-- PIN 일치 여부(내부용). anon 에게는 열지 않고, 아래 RPC 들이 security definer 로 부릅니다.
+create or replace function public.study_pin_is_valid(p_family_id text, p_pin text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, extensions
+as $$
+  select exists (
+    select 1
+      from public.family_secrets s
+     where s.family_id = p_family_id
+       and p_pin is not null
+       and btrim(p_pin) <> ''
+       and crypt(btrim(p_pin), s.parent_pin_hash) = s.parent_pin_hash
+  );
+$$;
+
+-- 부모 관리 PIN 확인. 맞으면 true, 틀리면 false.
+-- 아직 PIN 을 정하지 않았으면 안내 문구와 함께 오류를 냅니다(앱이 그대로 보여 줍니다).
+create or replace function public.study_verify_parent_pin(p_family_id text, p_pin text)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_hash text;
+begin
+  select parent_pin_hash into v_hash
+    from public.family_secrets
+   where family_id = p_family_id;
+
+  if v_hash is null then
+    raise exception '부모 관리 PIN이 아직 설정되지 않았어요. Supabase SQL Editor에서 PIN 설정 SQL을 한 번 실행해 주세요.'
+      using errcode = 'P0002';
+  end if;
+
+  if p_pin is null or btrim(p_pin) = '' then
+    return false;
+  end if;
+
+  return crypt(btrim(p_pin), v_hash) = v_hash;
+end;
+$$;
+
+-- 부모 관리 PIN 정하기/바꾸기.
+--   · 처음 정할 때:   study_set_parent_pin('fam_our_home', '새PIN')
+--   · 나중에 바꿀 때: study_set_parent_pin('fam_our_home', '새PIN', '지금PIN')
+create or replace function public.study_set_parent_pin(
+  p_family_id  text,
+  p_new_pin    text,
+  p_current_pin text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_new  text := btrim(coalesce(p_new_pin, ''));
+  v_hash text;
+begin
+  if v_new !~ '^[0-9]{4}$' then
+    raise exception '부모 관리 PIN은 숫자 4자리로 정해 주세요.' using errcode = '22023';
+  end if;
+
+  if not exists (select 1 from public.families where id = p_family_id) then
+    raise exception '가족을 찾을 수 없습니다.' using errcode = 'P0002';
+  end if;
+
+  select parent_pin_hash into v_hash
+    from public.family_secrets
+   where family_id = p_family_id;
+
+  -- 이미 정해져 있으면 지금 쓰는 PIN 을 알아야 바꿀 수 있습니다.
+  if v_hash is not null then
+    if p_current_pin is null or crypt(btrim(p_current_pin), v_hash) <> v_hash then
+      raise exception '지금 쓰는 부모 관리 PIN이 맞지 않습니다.' using errcode = '42501';
+    end if;
+  end if;
+
+  insert into public.family_secrets (family_id, parent_pin_hash, updated_at)
+  values (p_family_id, crypt(v_new, gen_salt('bf')), now())
+  on conflict (family_id) do update
+    set parent_pin_hash = excluded.parent_pin_hash,
+        updated_at      = now();
+
+  return true;
+end;
+$$;
 
 -- 공부 항목 추가: 부모는 아무 아이에게나, 아이는 자기 것만.
 create or replace function public.study_add_task(
@@ -213,16 +342,20 @@ begin
 end;
 $$;
 
--- 상태 변경: 부모는 모두, 아이는 자기 것만 그리고 '확인 완료'는 불가.
+-- 예전 3-인자 버전이 남아 있으면 PIN 없이 호출될 수 있으므로 먼저 지웁니다.
+drop function if exists public.study_set_task_status(text, text, text);
+
+-- 상태 변경: 완료 체크는 아이도 자기 숙제에 할 수 있고(시각 기록), 되돌리기는 부모 + PIN.
 create or replace function public.study_set_task_status(
   p_actor_id text,
   p_task_id  text,
-  p_status   text
+  p_status   text,
+  p_pin      text default null
 )
 returns public.tasks
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_actor public.family_members;
@@ -242,43 +375,57 @@ begin
     raise exception '알 수 없는 상태입니다.' using errcode = '22023';
   end if;
 
+  if v_task.status = p_status then
+    return v_task;
+  end if;
+
+  -- 완료 체크: 아이도 자기 숙제는 스스로 완료할 수 있습니다. 완료한 시각을 그대로 기록합니다.
   if p_status = 'verified' then
-    if v_actor.role <> 'parent' then
-      raise exception '확인 완료는 부모님만 할 수 있습니다.' using errcode = '42501';
+    if v_actor.role <> 'parent' and v_task.member_id <> v_actor.id then
+      raise exception '내 숙제만 완료할 수 있습니다.' using errcode = '42501';
     end if;
-    if v_task.status = 'verified' then
-      return v_task;
-    end if;
+
     update public.tasks
        set status = 'verified', verified_by = v_actor.id, verified_at = now(), updated_at = now()
      where id = v_task.id
     returning * into v_task;
-  else
-    if v_actor.role <> 'parent' and v_task.member_id <> v_actor.id then
-      raise exception '내 공부만 바꿀 수 있습니다.' using errcode = '42501';
-    end if;
-    if v_task.status = p_status then
-      return v_task;
-    end if;
-    update public.tasks
-       set status = p_status, verified_by = null, verified_at = null, updated_at = now()
-     where id = v_task.id
-    returning * into v_task;
+
+    return v_task;
   end if;
+
+  -- 여기부터는 완료를 푸는 쪽(되돌리기 / 요청 취소)
+  if v_task.status = 'verified' then
+    if v_actor.role <> 'parent' then
+      raise exception '완료를 되돌리는 건 부모님만 할 수 있습니다.' using errcode = '42501';
+    end if;
+    if not public.study_pin_is_valid(v_actor.family_id, p_pin) then
+      raise exception '부모 관리 PIN이 필요합니다. 앱에서 관리 잠금을 풀고 다시 시도해 주세요.' using errcode = '42501';
+    end if;
+  elsif v_actor.role <> 'parent' and v_task.member_id <> v_actor.id then
+    raise exception '내 공부만 바꿀 수 있습니다.' using errcode = '42501';
+  end if;
+
+  update public.tasks
+     set status = p_status, verified_by = null, verified_at = null, updated_at = now()
+   where id = v_task.id
+  returning * into v_task;
 
   return v_task;
 end;
 $$;
 
--- 삭제: 부모만.
+-- 삭제: 부모 + 부모 관리 PIN.
+drop function if exists public.study_delete_task(text, text);
+
 create or replace function public.study_delete_task(
   p_actor_id text,
-  p_task_id  text
+  p_task_id  text,
+  p_pin      text default null
 )
 returns void
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_actor public.family_members;
@@ -291,22 +438,82 @@ begin
     raise exception '아이는 항목을 삭제할 수 없습니다. 부모님께 알려 주세요.' using errcode = '42501';
   end if;
 
+  if not public.study_pin_is_valid(v_actor.family_id, p_pin) then
+    raise exception '부모 관리 PIN이 필요합니다. 앱에서 관리 잠금을 풀고 다시 시도해 주세요.' using errcode = '42501';
+  end if;
+
   delete from public.tasks where id = p_task_id and family_id = v_actor.family_id;
+end;
+$$;
+
+-- 구성원 이름 바꾸기: 부모 + 부모 관리 PIN. (아이디는 그대로라 링크·숙제가 유지됩니다)
+create or replace function public.study_rename_member(
+  p_actor_id  text,
+  p_member_id text,
+  p_name      text,
+  p_pin       text default null
+)
+returns public.family_members
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_actor  public.family_members;
+  v_member public.family_members;
+  v_name   text := btrim(coalesce(p_name, ''));
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    raise exception '사용자를 찾을 수 없습니다. 링크를 다시 확인해 주세요.' using errcode = '42501';
+  end if;
+  if v_actor.role <> 'parent' then
+    raise exception '이름 바꾸기는 부모님만 할 수 있습니다.' using errcode = '42501';
+  end if;
+  if not public.study_pin_is_valid(v_actor.family_id, p_pin) then
+    raise exception '부모 관리 PIN이 필요합니다. 앱에서 관리 잠금을 풀고 다시 시도해 주세요.' using errcode = '42501';
+  end if;
+
+  select * into v_member
+    from public.family_members
+   where id = p_member_id and family_id = v_actor.family_id;
+  if not found then
+    raise exception '같은 가족 구성원의 이름만 바꿀 수 있습니다.' using errcode = '42501';
+  end if;
+  if length(v_name) < 1 or length(v_name) > 30 then
+    raise exception '이름은 1~30자로 적어 주세요.' using errcode = '22023';
+  end if;
+
+  update public.family_members
+     set name = v_name
+   where id = v_member.id
+  returning * into v_member;
+
+  return v_member;
 end;
 $$;
 
 revoke all on function public.study_add_task(text, text, text, text, date, text, text) from public;
 revoke all on function public.study_update_task(text, text, text, text, date, text) from public;
-revoke all on function public.study_set_task_status(text, text, text) from public;
-revoke all on function public.study_delete_task(text, text) from public;
+revoke all on function public.study_set_task_status(text, text, text, text) from public;
+revoke all on function public.study_delete_task(text, text, text) from public;
+revoke all on function public.study_verify_parent_pin(text, text) from public;
+revoke all on function public.study_set_parent_pin(text, text, text) from public;
+revoke all on function public.study_rename_member(text, text, text, text) from public;
+-- 내부용: anon/authenticated 에게 열지 않습니다.
+revoke all on function public.study_pin_is_valid(text, text) from public, anon, authenticated;
 
 grant execute on function public.study_add_task(text, text, text, text, date, text, text) to anon, authenticated;
 grant execute on function public.study_update_task(text, text, text, text, date, text) to anon, authenticated;
-grant execute on function public.study_set_task_status(text, text, text) to anon, authenticated;
-grant execute on function public.study_delete_task(text, text) to anon, authenticated;
+grant execute on function public.study_set_task_status(text, text, text, text) to anon, authenticated;
+grant execute on function public.study_delete_task(text, text, text) to anon, authenticated;
+grant execute on function public.study_verify_parent_pin(text, text) to anon, authenticated;
+grant execute on function public.study_set_parent_pin(text, text, text) to anon, authenticated;
+grant execute on function public.study_rename_member(text, text, text, text) to anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 4. Realtime — 이 세 테이블의 변경이 폰으로 즉시 전달되게 합니다.
+--    (family_secrets 는 실시간 대상이 아닙니다.)
 -- ----------------------------------------------------------------------------
 
 do $$
@@ -388,5 +595,15 @@ select
 from plan p
 join days d on (extract(isodow from d.day)::int - 1) = any (p.days)
 on conflict (id) do nothing;
+
+-- ----------------------------------------------------------------------------
+-- 6. 부모 관리 PIN 정하기 (한 번만)
+--
+--   PIN 숫자는 이 공개 파일에 적지 않습니다. SQL Editor 에서 아래처럼 한 번 실행하세요.
+--     select public.study_set_parent_pin('fam_our_home', '네자리PIN');
+--   나중에 바꿀 때는 지금 쓰는 PIN 을 세 번째 인자로 넘깁니다.
+--     select public.study_set_parent_pin('fam_our_home', '새PIN', '지금PIN');
+--   (아직 정하지 않으면 앱의 부모 화면이 "PIN이 아직 설정되지 않았어요" 라고 안내합니다.)
+-- ----------------------------------------------------------------------------
 
 notify pgrst, 'reload schema';

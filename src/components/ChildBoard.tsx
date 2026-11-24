@@ -9,30 +9,28 @@ interface ChildBoardProps {
   member: Member;
   tasks: Task[];
   canAdd: boolean;
-  canVerify: boolean;
-  canEdit: boolean;
-  canDelete: boolean;
+  canComplete: boolean;
+  canManage: boolean;
   onAdd: () => void;
-  onRequest: (task: Task) => void;
-  onVerify: (task: Task) => void;
+  onComplete: (task: Task) => void;
   onRevert: (task: Task) => void;
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
+  onCopy: (task: Task) => void;
 }
 
 export function ChildBoard({
   member,
   tasks,
   canAdd,
-  canVerify,
-  canEdit,
-  canDelete,
+  canComplete,
+  canManage,
   onAdd,
-  onRequest,
-  onVerify,
+  onComplete,
   onRevert,
   onEdit,
   onDelete,
+  onCopy,
 }: ChildBoardProps) {
   const theme = memberTheme(member.color);
   const summary = summarize(tasks);
@@ -104,14 +102,13 @@ export function ChildBoard({
             <TaskCard
               key={task.id}
               task={task}
-              canVerify={canVerify}
-              canEdit={canEdit}
-              canDelete={canDelete}
-              onRequest={onRequest}
-              onVerify={onVerify}
+              canComplete={canComplete && task.member_id === member.id}
+              canManage={canManage && task.member_id === member.id}
+              onComplete={onComplete}
               onRevert={onRevert}
               onEdit={onEdit}
               onDelete={onDelete}
+              onCopy={onCopy}
             />
           ))}
         </ul>
