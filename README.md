@@ -263,8 +263,16 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     - 학년: 2026-11-24 `중1`·`초4` (보드·프로필) / 2027-02-28 23:30 그대로 / 2027-03-01 00:30 `중2`·`초5` /
       2029-03-01 `고1`·`중1` / 2030-01-15 그대로 / 2032-03-01 첫째 `졸업` · JS 오류 0
     - 화면: `/workspace/downloads/study_app_future_lock.png`
+  - **라이브 검증** (실제 사이트 + 실제 Supabase DB, 390×844 헤드리스 Chrome) 14개 검사 전부 통과 — `python3 scripts/verify-live-lock-grade.py`
+    - 둘째(`#as=mem_child2`) `초4` · 오늘은 완료 버튼이 살아 있고 잠금 0개
+    - 내일(11/25) 화면 카드 11개(= DB 13 - 아이 화면에서 숨는 📞 통화 2개) 전부 잠김 · `disabled`
+      스크립트로 눌러도 DB `verified` 0건 그대로 · 다음 주(12/1)도 전부 잠김
+    - 첫째(`#as=mem_child1`) `중1` · 첫째 화면의 12/1 8개도 모두 잠김 · JS 오류 0
   - 기존 검증도 다시 통과: `verify-parent-pin.py` 31개 · `verify-child-parent-defaults.py` 34개 · `verify-note-alert.py` 19개
     (복사·기본 목록으로 넣은 미래 날짜 항목은 이제 `잠긴 완료`로 세도록 검사를 맞췄습니다)
+
+- **불필요한 파일 정리** (2026-11-24): 추적되지 않던 `supabase/migration_presets_rpc.sql` 은 앱에서 쓰지 않아 저장소에서 뺐습니다
+  (내용은 `handoffs/🔒-미래-날짜-완료-잠금-🎓-매년-3월-학년-자동-진급/archive/` 에 보관). 개인정보(`2510`·실제 아이 이름) 흔적 0건.
 
 - **프로필 PIN 전환 · 부모 할 일 · 💬 우리 가족 한마디** (2026-11-24)
   - `supabase/schema.sql` (PGlite) — 49개 검사 전부 통과 + 알림판 25개 검사 전부 통과
