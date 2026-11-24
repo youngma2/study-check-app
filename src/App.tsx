@@ -224,6 +224,15 @@ export default function App() {
     [dayBoardMembers, selectedDate, tasksForView],
   );
   const daySummary = useMemo(() => summarize(dayTasks), [dayTasks]);
+  /** 날짜 요약을 한 사람씩 나눠 셈합니다 — 부모 화면은 아이마다 카드 한 장씩. */
+  const dayMemberStats = useMemo(
+    () =>
+      dayBoardMembers.map((member) => ({
+        member,
+        summary: summarize(tasksForView(member.id, selectedDate)),
+      })),
+    [dayBoardMembers, selectedDate, tasksForView],
+  );
   const weekPending = useMemo(
     () => Object.values(progress).reduce((sum, item) => sum + item.pending, 0),
     [progress],
@@ -507,7 +516,7 @@ export default function App() {
           onToday={goToday}
         />
 
-        <DayOverview dateIso={selectedDate} summary={daySummary} />
+        <DayOverview dateIso={selectedDate} summary={daySummary} memberSummaries={dayMemberStats} />
 
         {isParent ? (
           <button

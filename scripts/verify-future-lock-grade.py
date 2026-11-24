@@ -128,7 +128,8 @@ def main() -> int:
             # ---------------------------------------------------------------
             # A. 아이 화면 — 아직 안 온 날짜는 완료 버튼이 잠긴다 (오늘 = 2026-11-24)
             # ---------------------------------------------------------------
-            ctx_a, page = new_page()
+            # 검사는 날짜를 고정합니다 — 스크립트가 보는 날짜(오늘 2026-11-24)가 실제 날짜와 달라도 같은 결과.
+            ctx_a, page = new_page(clock=datetime.datetime(2026, 11, 24, 15, 0, tzinfo=KST))
             errors: list[str] = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(BASE + '#as=mem_child2')
@@ -219,7 +220,7 @@ def main() -> int:
             # ---------------------------------------------------------------
             # B. 부모 화면에서도 미래 날짜는 잠긴다
             # ---------------------------------------------------------------
-            ctx_b, dad = new_page()
+            ctx_b, dad = new_page(clock=datetime.datetime(2026, 11, 24, 15, 0, tzinfo=KST))
             dad.on('pageerror', lambda error: errors.append(str(error)))
             dad.goto(BASE + '#as=mem_dad')
             dad.wait_for_selector('[data-testid="parent-pin-gate"]')
