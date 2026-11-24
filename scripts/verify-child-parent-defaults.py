@@ -207,6 +207,13 @@ def main() -> int:
             check('기본 목록: 두 번 눌러도 중복으로 늘지 않는다', page.locator('[data-testid="task-card"]').count() == 7)
             page.wait_for_timeout(2800)
 
+            # 지난 기록이 아예 없는 날은 그 아이의 빠른 추가 항목(presets)으로 채운다
+            goto_day(page, week_start - timedelta(days=7))
+            page.click('[data-testid="fill-defaults"]')
+            page.wait_for_selector('text=기본 목록 8개를 추가했어요', timeout=8000)
+            check('기본 목록: 기록이 없으면 프리셋 8개로 채운다', page.locator('[data-testid="task-card"]').count() == 8)
+            page.wait_for_timeout(2800)
+
             # ---------------------------------------------------------------
             # F. 부모 → 아이로 본 뒤에도 복귀는 PIN 부터 (세션이 풀려 있어도)
             # ---------------------------------------------------------------
