@@ -92,7 +92,11 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
 - **역할 전환 시트**: 부모/아이 목록, 저장 상태 표시, `관리 잠금`, (부모) 이름 바꾸기.
   아이 화면에서도 `아빠`·`엄마` 가 보이고 `PIN` 배지가 붙습니다. 누르면 PIN 화면부터 — 누른 그 부모로 바뀝니다.
 - **💬 우리 가족 한마디(알림판)**: 아빠·엄마·아이 누구나 짧은 일정·전할 말을 남깁니다.
-  새 글은 다른 폰에 **실시간**으로 붙고, 아직 안 본 글은 화면 맨 위 **알림 배너**로 뜹니다(닫기 버튼).
+  **날짜마다 따로** 붙어서, 보고 있는 날의 한마디만 보입니다(머리에 `오늘 · 11/24 (화)` 처럼 그 날짜).
+  다른 날에 남긴 글은 그 날로 가야 보이고, 빈 날은 `이 날 남긴 한마디가 아직 없어요` 로 나옵니다.
+  (`src/lib/notes.ts` 의 `noteDate()` — id 에 박은 `n_2026-11-25_…` 날짜를 읽고, 예전 글은 작성일(한국 날짜)로 셉니다. 표 변경 없음)
+  새 글은 다른 폰에 **실시간**으로 붙고, 아직 안 본 글은 화면 맨 위 **알림 배너**로 뜹니다.
+  배너는 **아무 곳이나 눌러도 닫히고** 그 글이 붙은 날짜의 알림판으로 이동합니다(`✕` 는 날짜 그대로 닫기만).
   `🔔 알림 켜기` 를 누르면 브라우저 알림도 함께 옵니다(화면을 보고 있지 않을 때). 알림음은 아주 작게.
   내가 쓴 글은 스스로 지울 수 있고, 부모는 PIN 으로 남의 글도 지울 수 있습니다.
 - **부모 할 일 보드(부모 화면)**: 그 날 아빠·엄마에게 배정된 항목(예: 토요일 `독서록 검사`)이 있으면
@@ -204,7 +208,7 @@ src/
     CopySheet.tsx         공부 복사 시트 (아이별 · 날짜별 붙여넣기)
     ParentPinGate.tsx     부모 관리 PIN 잠금 화면 (숫자 키패드)
     ProfileSheet.tsx      역할 전환 시트 (아빠·엄마 + PIN 배지 · 관리 잠금 · 이름 바꾸기)
-    FamilyNotesBoard.tsx  💬 우리 가족 한마디 (알림판 · 실시간 · 안 읽은 글 배너)
+    FamilyNotesBoard.tsx  💬 우리 가족 한마디 (날짜별 알림판 · 실시간 · 안 읽은 글 배너)
     Sheet.tsx             바텀시트 공통
     icons.tsx             인라인 SVG 아이콘
   lib/
@@ -216,7 +220,7 @@ src/
     supabase.ts           Supabase 클라이언트 · 행 매핑 · RPC 쓰기 · Realtime 구독
     pin.ts                부모 관리 PIN (세션 보관 · 데모 모드 해시)
     defaults.ts           '기본 목록' — 같은 요일 패턴의 지난 기록으로 그 날 채우기
-    notes.ts              💬 한마디 기기 저장·안 읽은 시각·시간 표기
+    notes.ts              💬 한마디 날짜(noteDate)·기기 저장·안 읽은 시각·시간 표기
     chime.ts              새 한마디 알림음 (아주 작은 두 음)
     study-context.tsx     React 상태/액션 훅 (낙관적 반영 + 실시간 병합 + 복사)
     theme.ts, cx.ts       색상 테마·className 유틸
@@ -227,6 +231,7 @@ scripts/verify-live-sync.py  라이브 사이트에서 두 사람 시점 실시�
 scripts/verify-child-parent-defaults.py  프로필 아빠·엄마 PIN 전환 · 기본 목록 1탭 채우기 검증(데모 빌드)
 scripts/verify-family-board.py  프로필 PIN 전환 · 부모 할 일 보드 · 💬 한마디 검증(데모 빌드)
 scripts/verify-note-alert.py  💬 새 한마디 알림 경로 검증 — 서비스 워커 알림·진동·배너 닫기(데모 빌드)
+scripts/verify-live-note-dates.py  라이브 사이트에서 💬 한마디가 날짜마다 따로 보이는지 · 배너 닫기 검증
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백)
 public/icons/             앱 아이콘(192/512/maskable/apple)
@@ -246,6 +251,23 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **💬 우리 가족 한마디 날짜별 분리 · 알림 배너 터치 닫기** (2026-11-24)
+  - `python3 scripts/verify-family-board.py` — 390×844 헤드리스 Chrome(데모 빌드) 69개 검사 전부 통과
+    - 알림판 머리에 보고 있는 날짜(`11/28 (토)`) · 남긴 글 id 에 그 날짜(`n_2026-11-28_…`) · 빈 날 안내
+    - 날짜 분리: 토요일에 남긴 글이 오늘·내일에 안 보임 · 내일에 남긴 글은 내일 알림판에만 · 돌아오면 그대로
+    - 배너: 다른 날을 봐도 남아 있음 · 본문을 누르면 닫히고 그 글이 붙은 날(오늘)로 이동 · `✕` 는 보던 날짜 그대로 닫기만
+    - 지운 글만 그 날 알림판에서 빠지고 다른 날 글은 그대로 · JS 오류 0
+  - `python3 scripts/verify-note-alert.py` — 같은 데모 빌드 23개 검사 전부 통과
+    - 서비스 워커 알림 경로·태그·진동 그대로 · 알림판을 눌러도 배너는 그대로
+    - 배너 본문 누르기 → 닫힘 + 그 날 알림판 · 다시 열어도 울리지 않음 · `✕` → 닫힘 + 날짜 그대로
+  - **라이브 검증** (실제 사이트 + 실제 Supabase DB) 17개 검사 전부 통과 — `python3 scripts/verify-live-note-dates.py`
+    - 라이브 번들에 새 문구 반영 · DB 한마디 4건이 모두 `2026-11-24` 로 묶임 · `2026-11-25` 는 0건
+    - 아이(`#as=mem_child1`) 오늘 알림판 `오늘 · 11/24 (화)` 에 4건 모두 보임 · 내일 알림판 `내일 · 11/25 (수)` 는
+      `이 날 남긴 한마디가 아직 없어요` 로 따로 비어 있고 오늘 글이 새지 않음 · 배너를 누르면 오늘로 이동하며 닫힘 · JS 오류 0
+    - 화면: `/workspace/downloads/study_live_notes_today.png` · `study_live_notes_tomorrow.png`
+  - 기존 검증도 그대로 통과: `verify-parent-pin.py` · `verify-child-parent-defaults.py` · `verify-future-lock-grade.py` (실패 0)
+  - `supabase/schema.sql`·`setup.html` 은 **바뀐 것 없음** (`study_add_note` 가 이미 `p_id text` 를 받음) · `tsc --noEmit` 0 · `npm run build` 성공
 
 - **미래 날짜 완료 잠금 · 매년 3월 학년 자동 진급** (2026-11-24)
   - `node scripts/verify-grade-math.mjs` — 계산 로직 34개 검사 전부 통과
@@ -336,7 +358,7 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
   - 공휴일: 12/25 성탄절 빨간 점·주간 목록·날짜 제목 배지
   - 실시간: 부모가 추가한 숙제가 아이 화면에 새로고침 없이 등장
   - 검증용 숙제는 모두 삭제, 숙제 수 39개 원복
-- `python3 scripts/verify-note-alert.py` — 390×844 헤드리스 Chrome(데모 빌드) 19개 검사 전부 통과
+- `python3 scripts/verify-note-alert.py` — 390×844 헤드리스 Chrome(데모 빌드) 19개 검사 전부 통과 (그때 기준 · 지금은 위 23개로 늘었습니다)
   - 앱을 보고 있어도(`visibilityState=visible`) 알림이 나감 · 안드로이드 크롬용 `ServiceWorkerRegistration.showNotification`
     경로(태그 · `renotify` · 진동 `[150,80,150]`) · `new Notification` 은 서비스 워커가 없을 때만(2.5초 기다린 뒤)
   - 알림판을 눌러도 배너는 그대로 · 닫기 버튼으로만 사라짐 · 닫은 뒤 다시 열어도 울리지 않음 · JS 오류 0
