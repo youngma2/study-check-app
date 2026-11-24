@@ -160,6 +160,17 @@ def main() -> int:
             check('PIN 통과: 부모 전용 기능이 보인다', page.locator('[data-testid="delete-task"]').count() > 0)
             check('부모 시점: 기본 목록 버튼이 위쪽에 있다', page.locator('[data-testid="fill-defaults"]').count() == 1)
 
+            # 이번 주 금요일에 격주 '상담' 항목을 하나 넣어 두고, 월·수·금 기본 목록에서 빠지는지 본다
+            friday = week_start + timedelta(days=4)
+            goto_day(page, friday)
+            page.click('[data-testid="open-add"]')
+            page.wait_for_selector('[data-testid="save-task"]')
+            page.fill('[role="dialog"] input[placeholder="예) 수학 문제집 2쪽 풀기"]', '샘플 상담 (오후 6시 30분)')
+            page.click('[data-testid="save-task"]')
+            page.wait_for_selector('text=공부 항목을 추가했어요', timeout=8000)
+            check('준비: 금요일에 격주 상담 항목을 하나 넣었다', '상담' in page.inner_text('main'))
+            page.wait_for_timeout(2800)
+
             # ---------------------------------------------------------------
             # D. 기본 목록 — 쉬는 날(일요일·공휴일)에는 넣지 않는다
             # ---------------------------------------------------------------
@@ -188,6 +199,7 @@ def main() -> int:
             check('기본 목록: 한 번 눌러 7개(첫째 3 · 둘째 4)가 들어간다', added == 7, f'{added}개')
             check('기본 목록: 들어간 항목은 할 일 상태', page.locator('[data-testid="complete-task"]').count() == 7)
             check('기본 목록: 금요일(월·수·금 패턴)에 하던 항목을 가져온다', '신문 쓰기' in page.inner_text('main'))
+            check('기본 목록: 격주 상담 항목은 넣지 않는다', '상담' not in page.inner_text('main'))
             page.wait_for_timeout(2800)
 
             page.click('[data-testid="fill-defaults"]')
