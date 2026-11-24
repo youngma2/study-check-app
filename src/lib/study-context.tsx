@@ -293,7 +293,10 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
       if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
 
-      const useCloud = modeRef.current === 'supabase' && cloud !== null;
+      const useCloud = cloud !== null;
+      if (useCloud && modeRef.current !== 'supabase') {
+        return { ok: false, error: '가족 동기화에 연결된 뒤에 남길 수 있어요. 잠시 뒤 다시 시도해 주세요.' };
+      }
       if (useCloud && notesStateRef.current !== 'ready') {
         return { ok: false, error: '알림판이 아직 준비 중이에요. 잠시 뒤 다시 시도해 주세요.' };
       }
@@ -354,13 +357,17 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
       }
 
+      const useCloud = cloud !== null;
+      if (useCloud && modeRef.current !== 'supabase') {
+        return { ok: false, error: '가족 동기화에 연결된 뒤에 지울 수 있어요. 잠시 뒤 다시 시도해 주세요.' };
+      }
+
       const before = notesRef.current;
       const next = before.filter((item) => item.id !== noteId);
       notesRef.current = next;
       setNotes(next);
 
-      const useCloud = modeRef.current === 'supabase' && cloud !== null;
-      if (!useCloud || !cloud) {
+      if (!useCloud) {
         saveLocalNotes(next);
         return { ok: true };
       }

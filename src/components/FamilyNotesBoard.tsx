@@ -114,6 +114,7 @@ export function FamilyNotesBoard({
         <input
           ref={inputRef}
           data-testid="note-input"
+          aria-label="가족 한마디 남기기"
           value={draft}
           maxLength={NOTE_MAX_LENGTH}
           disabled={!ready}
