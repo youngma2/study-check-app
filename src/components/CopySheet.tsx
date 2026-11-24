@@ -211,7 +211,11 @@ export function CopySheet({ open, onClose, sources, members, dates, selectedDate
         >
           {busy
             ? '복사하는 중…'
-            : `${picked.length}개 항목을 ${targets.length}일에 복사`}
+            : targets.length === 0
+              ? `${picked.length}개 항목 · 날짜를 골라 주세요`
+              : targets.length === 1
+                ? `${picked.length}개를 ${formatShortDate(targets[0])}로 복사`
+                : `${picked.length}개를 ${targets.length}일에 복사`}
         </button>
       </div>
     </Sheet>
