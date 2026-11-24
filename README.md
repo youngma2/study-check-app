@@ -252,6 +252,15 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     - 📞 통화 1·2: 아이 화면에서는 목록·날짜 요약에서 빠짐(카드 1개만) · 부모 화면에서는 통화 1·2·하교 시간이 그대로 보임 · JS 오류 0
   - `python3 scripts/verify-child-parent-defaults.py` — 같은 데모 빌드 34개 검사 전부 통과 (프로필 흐름을 새 방식으로 갱신)
   - 부모 PIN 숫자와 아이 실제 이름을 저장소 전체에서 검색(node_modules·dist·dist-demo·.git 제외) → **0건**
+- **라이브 검증 — 프로필 PIN 전환 · 부모 할 일 · 📞 통화 부모 전용 · 알림판 준비 상태** (실제 사이트 + 실제 Supabase, 390×844)
+  - 32개 검사 전부 통과 · 읽기만 하고 가족 데이터는 바꾸지 않음
+  - `setup.html` HTTP 200 · `family_notes`·`study_add_note`·`study_delete_note` 포함 · 메인 번들 HTTP 200
+  - 아이(`#as=mem_child1`, 11/25): DB 12건 중 통화 2건이 빠져 카드 10개 · 날짜 요약 `전체 10개` · `통화`·`하교` 문구 없음
+  - 아이 프로필: `아빠`·`엄마` + `PIN` 배지 · 아빠를 누르면 PIN 화면(목록 안 보임) · 취소하면 보던 아이 화면 그대로
+  - 알림판: 표가 없을 때 `준비 중` 안내 + 입력 잠김, **공부 카드는 그대로 10개**
+  - 부모(`#as=mem_dad`): PIN 으로 열림 · 11/25 에 `통화 1`·`통화 2`·`하교` 가 그대로 보임 · 11/28 토요일 `부모 할 일` 에
+    아빠의 토요일 검사 항목 + 그 자리에서 `완료` 가능 · JS 오류 0
+  - **남은 한 단계:** `setup.html` 의 SQL 을 한 번 실행하면 알림판이 켜집니다(그 전까지는 `준비 중` 안내).
 
 - `npx tsc --noEmit` — 타입 오류 0 · `npm run build` 성공 (`dist/`, `setup.html` 자동 생성)
 - `supabase/schema.sql` — 로컬 PostgreSQL(PGlite) 49개 검사 전부 통과
