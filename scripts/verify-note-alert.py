@@ -1,0 +1,203 @@
+"""새 한마디 알림 경로 검증 — 안드로이드 크롬(서비스 워커 알림) · 진동 · 배너 닫기 동작.
+
+    VITE_SUPABASE_URL= VITE_SUPABASE_ANON_KEY= npx vite build --outDir dist-demo
+    python3 scripts/verify-note-alert.py
+
+390×844 헤드리스 Chrome 으로 dist-demo 를 띄워 확인합니다.
+브라우저 알림 API 는 기록만 하도록 바꿔 끼워(헤드리스에는 알림 표시가 없음),
+앱이 실제로 어느 경로(showNotification / new Notification)를 부르는지 봅니다.
+"""
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import socket
+import subprocess
+import time
+
+from playwright.sync_api import sync_playwright
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CHROME = '/workspace/.tools/chrome/chrome-headless-shell-linux64/chrome-headless-shell'
+CHROME_LIBS = '/workspace/.tools/chrome/lib'
+NODE_BIN = '/workspace/.tools/node/bin'
+PORT = 4179
+ORIGIN = f'http://127.0.0.1:{PORT}'
+BASE = ORIGIN + '/study-check-app/'
+
+DB_KEY = 'study-check.db.v1'  # (데모 모드는 첫 변경 때 저장되므로 이 검사에서는 쓰지 않습니다.)
+NOTES_KEY = 'study-check.notes.v1'
+
+failures: list[str] = []
+
+
+def check(name: str, cond: bool, extra: str = '') -> None:
+    print(f"{'PASS' if cond else 'FAIL'}  {name}{(' — ' + extra) if extra else ''}")
+    if not cond:
+        failures.append(name)
+
+
+def wait_for_port(port: int, timeout: float = 60.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket() as sock:
+            sock.settimeout(0.5)
+            if sock.connect_ex(('127.0.0.1', port)) == 0:
+                return True
+        time.sleep(0.3)
+    return False
+
+
+def start_server():
+    env = os.environ.copy()
+    env['PATH'] = NODE_BIN + os.pathsep + env.get('PATH', '')
+    proc = subprocess.Popen(
+        ['npx', 'vite', 'preview', '--outDir', 'dist-demo', '--port', str(PORT), '--host', '127.0.0.1'],
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        preexec_fn=os.setsid,
+    )
+    if not wait_for_port(PORT):
+        proc.kill()
+        raise RuntimeError('preview 서버가 뜨지 않았습니다.')
+    return proc
+
+
+# 알림/진동 API 를 기록용으로 바꿔 끼웁니다(앱 코드는 그대로 실행).
+INSTRUMENT = """
+(() => {
+  const rec = { sw: [], ctor: [], vibrate: [] };
+  window.__notifyRec = rec;
+
+  // new Notification(...) — 안드로이드 크롬에서는 실제로 던지는 경로라 기록만 합니다.
+  function FakeNotification(title, options) {
+    rec.ctor.push({ title, options: options || {} });
+  }
+  FakeNotification.permission = 'granted';
+  FakeNotification.requestPermission = () => Promise.resolve('granted');
+  try {
+    Object.defineProperty(window, 'Notification', { value: FakeNotification, configurable: true, writable: true });
+  } catch (error) {}
+
+  // ServiceWorkerRegistration.showNotification(...) — 실제로 표시하지 않고 기록만 합니다.
+  try {
+    const proto = window.ServiceWorkerRegistration && window.ServiceWorkerRegistration.prototype;
+    if (proto) {
+      proto.showNotification = function (title, options) {
+        rec.sw.push({ title, options: options || {} });
+        return Promise.resolve();
+      };
+    }
+  } catch (error) {}
+
+  try {
+    navigator.vibrate = function (pattern) {
+      rec.vibrate.push(pattern);
+      return true;
+    };
+  } catch (error) {}
+})();
+"""
+
+
+def main() -> int:
+    server = start_server()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                executable_path=CHROME,
+                args=['--no-sandbox'],
+                env={**os.environ, 'LD_LIBRARY_PATH': CHROME_LIBS},
+            )
+            ctx = browser.new_context(
+                viewport={'width': 390, 'height': 844},
+                locale='ko-KR',
+                timezone_id='Asia/Seoul',
+                permissions=['notifications'],
+            )
+            ctx.add_init_script(INSTRUMENT)
+            page = ctx.new_page()
+            page.on('dialog', lambda dialog: dialog.accept())
+            errors: list[str] = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+
+            # 1) 앱을 한 번 열어 데모 DB 를 만들고, 엄마 이름의 새 글을 기기에 넣습니다.
+            page.goto(BASE + '#as=mem_child1')
+            page.wait_for_selector('[data-testid="open-profile"]', timeout=15000)
+            seeded = page.evaluate(
+                """({ notesKey }) => {
+                    const notes = JSON.parse(localStorage.getItem(notesKey) || '[]');
+                    notes.unshift({
+                      id: 'n_mom_alert_probe',
+                      family_id: 'fam_demo',
+                      author_id: 'mem_mom',
+                      content: '학원 6시 30분이에요',
+                      created_at: new Date().toISOString(),
+                    });
+                    localStorage.setItem(notesKey, JSON.stringify(notes));
+                    return notes.length;
+                }""",
+                {'notesKey': NOTES_KEY},
+            )
+            check('준비: 엄마 이름의 새 글을 기기에 넣었다', isinstance(seeded, int), str(seeded))
+
+            # 2) 새로 열면(=앱이 화면에 떠 있는 상태) 알림이 나가야 합니다.
+            page.reload()
+            page.wait_for_selector('[data-testid="family-note-alert"]', timeout=10000)
+            visible = page.evaluate('document.visibilityState')
+            check('앱이 화면에 떠 있다(visibilityState=visible)', visible == 'visible', visible)
+            page.wait_for_timeout(3500)  # serviceWorker.ready 대기 여유
+
+            rec = page.evaluate('window.__notifyRec')
+            sw_calls = rec.get('sw', [])
+            ctor_calls = rec.get('ctor', [])
+            vib = rec.get('vibrate', [])
+
+            check('서비스워커 알림(showNotification)을 불렀다', len(sw_calls) >= 1, json.dumps(sw_calls, ensure_ascii=False)[:200])
+            first = sw_calls[0] if sw_calls else {'title': '', 'options': {}}
+            check('알림 제목', first['title'] == '💬 우리 가족 한마디', str(first['title']))
+            check('알림 본문에 보낸 사람과 내용', '엄마' in str(first['options'].get('body', '')) and '학원 6시 30분이에요' in str(first['options'].get('body', '')), str(first['options'].get('body', '')))
+            check('알림 태그', str(first['options'].get('tag', '')).startswith('study-note-'), str(first['options'].get('tag', '')))
+            check('renotify: true', first['options'].get('renotify') is True, str(first['options'].get('renotify')))
+            check('new Notification(...) 로는 가지 않았다', len(ctor_calls) == 0, str(len(ctor_calls)))
+            check('진동을 울렸다 [150, 80, 150]', vib and list(vib[0]) == [150, 80, 150], str(vib))
+
+            # 3) 알림판을 눌러도 아직 안 본 배너가 사라지지 않아야 합니다.
+            page.click('[data-testid="family-notes"] h2')
+            page.wait_for_timeout(600)
+            check('알림판을 눌러도 배너는 그대로', page.locator('[data-testid="family-note-alert"]').count() == 1)
+            page.click('[data-testid="note-input"]')
+            page.wait_for_timeout(400)
+            check('알림판 입력칸을 눌러도 배너는 그대로', page.locator('[data-testid="family-note-alert"]').count() == 1)
+
+            # 4) 닫기 버튼을 누르면 사라지고, 다시 열어도 울리지 않습니다.
+            page.click('[data-testid="dismiss-note-alert"]')
+            page.wait_for_timeout(500)
+            check('닫기 버튼: 배너가 사라진다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+
+            page.reload()
+            page.wait_for_selector('[data-testid="open-profile"]', timeout=10000)
+            page.wait_for_timeout(1800)
+            check('닫은 뒤 다시 열면 배너가 없다', page.locator('[data-testid="family-note-alert"]').count() == 0)
+            rec2 = page.evaluate('window.__notifyRec')
+            check('닫은 뒤에는 알림도 다시 울리지 않는다', len(rec2.get('sw', [])) == 0, str(len(rec2.get('sw', []))))
+
+            check('자바스크립트 오류 없음', not errors, ' / '.join(errors)[:200])
+
+            browser.close()
+    finally:
+        server.kill()
+
+    print()
+    if failures:
+        print(f'{len(failures)}개 실패: ' + ', '.join(failures))
+        return 1
+    print('모두 통과')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

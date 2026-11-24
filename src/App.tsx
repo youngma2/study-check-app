@@ -88,7 +88,8 @@ export default function App() {
     : undefined;
 
   /**
-   * 새 한마디가 올라오면: 알림음 + (화면을 보고 있지 않을 때) 브라우저 알림.
+   * 새 한마디가 올라오면: 알림음 + 브라우저(OS) 알림 + 짧은 진동.
+   * 앱을 보고 있어도 알려 줍니다(화면 위 배너와 함께 옵니다).
    * 같은 글에는 한 번만 반응합니다.
    */
   const notifiedNoteRef = useRef<string | null>(null);
@@ -97,16 +98,50 @@ export default function App() {
     if (notifiedNoteRef.current === latestUnseen.id) return;
     notifiedNoteRef.current = latestUnseen.id;
     playNoteChime();
-    if (notifyPermission === 'granted' && document.visibilityState !== 'visible') {
+
+    if (notifyPermission === 'granted') {
+      const title = '💬 우리 가족 한마디';
+      const options: NotificationOptions = {
+        body: `${latestUnseenAuthor?.name ?? '가족'}: ${latestUnseen.content}`,
+        tag: `study-note-${latestUnseen.id}`,
+      };
       try {
-        new Notification('💬 우리 가족 한마디', {
-          body: `${latestUnseenAuthor?.name ?? '가족'}: ${latestUnseen.content}`,
-          tag: `study-note-${latestUnseen.id}`,
-        });
+        navigator.vibrate?.([150, 80, 150]);
       } catch {
-        /* 알림이 안 떠도 위쪽 배너로 알려 줍니다. */
+        /* 진동이 없는 기기 */
       }
+
+      void (async () => {
+        // 안드로이드 크롬은 new Notification() 을 막습니다("Illegal constructor").
+        // 서비스 워커 알림(showNotification)을 먼저 쓰고, 워커가 없을 때만 new Notification 으로 넘어갑니다.
+        const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : undefined;
+        if (sw) {
+          try {
+            // ready 는 워커가 활성화될 때까지 기다립니다. 너무 오래 걸리면 아래로 넘어갑니다.
+            const registration = await Promise.race([
+              sw.ready,
+              new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 2500)),
+            ]);
+            if (registration) {
+              await registration.showNotification(title, {
+                ...options,
+                vibrate: [150, 80, 150],
+                renotify: true,
+              } as NotificationOptions);
+              return;
+            }
+          } catch {
+            /* 워커 알림이 안 되면 아래 new Notification 으로 넘어갑니다. */
+          }
+        }
+        try {
+          new Notification(title, options);
+        } catch {
+          /* 알림이 안 떠도 위쪽 배너로 알려 줍니다. */
+        }
+      })();
     }
+
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [latestUnseen, latestUnseenAuthor, notifyPermission]);
 

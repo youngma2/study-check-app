@@ -76,7 +76,6 @@ export function FamilyNotesBoard({
   return (
     <section
       data-testid="family-notes"
-      onClick={onSeen}
       className="mt-3 rounded-[26px] bg-white p-3 shadow-card ring-1 ring-slate-900/5"
     >
       <header className="flex items-center gap-2 px-0.5 pb-2">
