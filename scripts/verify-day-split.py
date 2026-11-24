@@ -215,7 +215,7 @@ def main() -> int:
                 page.eval_on_selector(
                     f'[data-testid="day-stat-bar-{own}"]',
                     'el => el.style.width',
-                ) == f'{max(percent(own_verified, own_total), 8)}%',
+                ) == f'{percent(own_verified, own_total)}%',
                 page.eval_on_selector(f'[data-testid="day-stat-bar-{own}"]', 'el => el.style.width'),
             )
             check('아이 화면: 동생 카드 이름은 안 보인다', names[other] not in page.inner_text('[data-testid="day-member-stats"]'))
@@ -268,7 +268,7 @@ def main() -> int:
                     f'부모 화면: {names[member_id]} 진행 막대',
                     page.eval_on_selector(
                         f'[data-testid="day-stat-bar-{member_id}"]', 'el => el.style.width'
-                    ) == f'{max(percent(verified, total), 8)}%',
+                    ) == f'{percent(verified, total)}%',
                     page.eval_on_selector(f'[data-testid="day-stat-bar-{member_id}"]', 'el => el.style.width'),
                 )
 

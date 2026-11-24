@@ -134,7 +134,7 @@ function MemberStatCard({
             'block h-full rounded-full transition-all duration-500',
             allDone ? 'bg-emerald-400' : theme.bar,
           )}
-          style={{ width: `${summary.total === 0 ? 0 : Math.max(percent, 8)}%` }}
+          style={{ width: `${percent}%` }}
         />
       </span>
 

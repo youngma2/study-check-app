@@ -76,6 +76,9 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
   - **공휴일과 일요일은 빨간색**입니다. 공휴일에는 날짜 옆에 빨간 점이 붙고, 스트립 아래에 이번 주 공휴일 이름이 나옵니다.
     (2026–2027 관공서 공휴일 · 설날·부처님오신날·추석 · 대체공휴일 포함, `src/lib/date.ts`)
 - **날짜 요약**: 전체·완료 수, 진행률 링. 공휴일이면 날짜 옆에 빨간 공휴일 이름 배지.
+  - **부모 화면은 아이마다 카드 한 장씩** 나란히: 이름·`3 / 4개`·`75%`·진행 막대(아이 색). 그날 부모 할 일이 있으면 부모 카드도 함께 붙습니다.
+  - **아이 화면은 자기 카드 한 장만** 넓게 — 남매 숫자는 보이지 않습니다.
+  - 이름은 언제나 `members`(DB)에서 오고, 코드에는 아이 이름이 없습니다.
 - **복사 줄**: `이 날 공부 복사` · `어제 것 가져오기` — 날짜를 골라 여러 날에 한 번에 붙여넣습니다.
 - **기본 목록 줄(부모 화면)**: 날짜 요약 바로 아래 `📋 기본 목록 · 이 날 한 번에 넣기` — 한 번 누르면 그 날 아이들이
   원래 하던 공부가 `할 일`로 한꺼번에 들어갑니다.
@@ -200,7 +203,7 @@ src/
   components/
     AppHeader.tsx         로고·가족명·프로필 전환
     WeekStrip.tsx         주간 달력 스트립
-    DayOverview.tsx       날짜 요약 + 진행률 링
+    DayOverview.tsx       날짜 요약 + 사람별 완료율 카드(이름·n/m개·%·막대) + 진행률 링
     ChildBoard.tsx        아이별 보드
     TaskCard.tsx          항목 카드 (완료 체크·시각·부모 메뉴)
     StatusBadge.tsx       상태 배지
@@ -226,10 +229,12 @@ src/
     theme.ts, cx.ts       색상 테마·className 유틸
 supabase/schema.sql       테이블 + RLS + study_* RPC + Realtime + 가족/이번 주 시드
 scripts/gen-setup.mjs     schema.sql → public/setup.html (SQL 복사 버튼 페이지)
+scripts/make-icons.py     홈 화면 아이콘 생성 — 둥근 모서리 안쪽 크롭(흰 모서리 없음) · maskable 여백 12%
 scripts/verify-sync.py    동기화 전/후 화면 자동 검증
 scripts/verify-live-sync.py  라이브 사이트에서 두 사람 시점 실시간 검증(테스트 항목 자동 정리)
 scripts/verify-child-parent-defaults.py  프로필 아빠·엄마 PIN 전환 · 기본 목록 1탭 채우기 검증(데모 빌드)
 scripts/verify-family-board.py  프로필 PIN 전환 · 부모 할 일 보드 · 💬 한마디 검증(데모 빌드)
+scripts/verify-day-split.py  날짜 요약 완료율이 아이별로 나뉘는지 검증 — 카드 수·이름·개수·퍼센트·막대·나란히(데모 빌드)
 scripts/verify-note-alert.py  💬 새 한마디 알림 경로 검증 — 서비스 워커 알림·진동·배너 닫기(데모 빌드)
 scripts/verify-live-note-dates.py  라이브 사이트에서 💬 한마디가 날짜마다 따로 보이는지 · 배너 닫기 검증
 public/manifest.json      PWA 매니페스트
@@ -251,6 +256,20 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **아이별 완료율 카드 · 홈 화면 아이콘 교체** (2026-11-25)
+  - `python3 scripts/verify-day-split.py` — 390×844 헤드리스 Chrome(데모 빌드) 29개 검사 전부 통과
+    - 아이 화면: 카드 1장(자기 것) · 이름·`3 / 4개`·`75%`·막대 75% · 동생 이름 없음 · 머리 요약 `전체 4개 · 완료 3개`
+    - 부모 화면: 아이마다 카드 2장이 같은 줄에 176px씩 나란히 · `3 / 4개` 75% · `1 / 3개` 33% · 머리 요약 `전체 7개 · 완료 4개`
+    - 항목이 없는 아이는 `0 / 0개` 0%(막대 없음) · JS 오류 0
+  - 기존 검증도 그대로 통과(실패 0): `verify-parent-pin.py` · `verify-family-board.py` · `verify-child-parent-defaults.py` · `verify-note-alert.py` · `node scripts/verify-grade-math.mjs`(34)
+    - `verify-future-lock-grade.py` 는 검사가 보는 날짜(2026-11-24)에 브라우저 시계를 고정해, 실제 날짜가 지나도 같은 결과가 나오게 했습니다(32개 통과)
+  - **라이브 검증** (실제 사이트 + 실제 Supabase DB, 390×844 헤드리스 Chrome) — 부모 화면 PIN 을 풀고 확인
+    - 부모 화면 오늘(11/25): 아이 카드 두 장이 나란히 `0 / 9개` `0%` 씩 · 머리 요약 `전체 18개 · 완료 0개` (오늘은 아직 완료가 없어 둘 다 0%) · 이름은 DB 에서 온 그대로
+    - `manifest.json` 이 `icons/icon-192.png?v=2`·`icon-512.png?v=2`·`icon-maskable-512.png?v=2` 를 가리키고 셋 다 HTTP 200(192·512·512) · JS 오류 0
+    - 화면: `/workspace/downloads/study_live_split_overview.png` · 완료율이 다른 예시(데모): `study_split_progress_example.png` (첫째 75% · 둘째 33%)
+  - 아이콘: 원본 `downloads/study_app_icon_raw.png` 에서 둥근 모서리 안쪽으로 8.5% 크롭 → 흰 모서리 0 · maskable 은 같은 그라데이션을 2차 곡면으로 이어 그린 여백 12%(안전 영역) · `apple-touch-icon.png`(180)도 함께 교체
+  - 캐시: `manifest.json`·`index.html` 아이콘 URL `?v=2` · 서비스 워커 셸 캐시 `study-check-shell-v2` · `tsc --noEmit` 0 · `npm run build` 성공
 
 - **💬 우리 가족 한마디 날짜별 분리 · 알림 배너 터치 닫기** (2026-11-24)
   - `python3 scripts/verify-family-board.py` — 390×844 헤드리스 Chrome(데모 빌드) 69개 검사 전부 통과
