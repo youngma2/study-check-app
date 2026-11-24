@@ -47,6 +47,32 @@ export function todayISO(): string {
   return toISODate(new Date());
 }
 
+/**
+ * 한국(Asia/Seoul) 기준 오늘 'YYYY-MM-DD'.
+ * 기기 시간대가 달라도 우리 가족의 '오늘'은 한국 날짜로 셉니다.
+ */
+const KOREA_DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Seoul',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+export function koreaTodayISO(now: Date = new Date()): string {
+  const parts = KOREA_DATE_FORMAT.formatToParts(now);
+
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  const year = value('year') || String(now.getFullYear());
+  const month = value('month') || String(now.getMonth() + 1).padStart(2, '0');
+  const day = value('day') || String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** 아직 오지 않은 날짜인지 — 그날이 되기 전에는 완료 체크를 막습니다. */
+export function isFutureDate(iso: string, today: string = koreaTodayISO()): boolean {
+  return iso > today;
+}
+
 export function formatDayTitle(iso: string): string {
   const date = fromISODate(iso);
   return `${date.getMonth() + 1}월 ${date.getDate()}일 ${WEEKDAY_LABELS[date.getDay()]}요일`;

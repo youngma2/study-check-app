@@ -10,7 +10,7 @@ import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
 import { CopyIcon, LockIcon, PlusIcon, UndoIcon, XIcon } from './components/icons';
 import { playNoteChime } from './lib/chime';
-import { addDays, formatTimeKo, fromISODate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
+import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { defaultItemsForDay } from './lib/defaults';
 import { formatNoteTime } from './lib/notes';
 import { summarize } from './lib/store';
@@ -254,8 +254,13 @@ export default function App() {
     return result;
   };
 
-  /** 완료 체크 — 누르는 순간 완료로 기록되고, 그 시각이 카드에 남습니다. */
+  /** 완료 체크 — 누르는 순간 완료로 기록되고, 그 시각이 카드에 남습니다.
+   *  아직 오지 않은 날짜의 공부는 그날이 되기 전까지 완료할 수 없습니다(버튼도 잠겨 있어요). */
   const handleComplete = async (task: Task) => {
+    if (isFutureDate(task.due_date)) {
+      notify('아직 날짜가 되지 않았어요 · 그날이 되면 완료할 수 있어요');
+      return;
+    }
     const result = await setStatus(task.id, 'verified');
     if (result.ok) {
       const time = formatTimeKo(new Date().toISOString());

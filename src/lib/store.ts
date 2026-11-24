@@ -1,3 +1,4 @@
+import { koreaTodayISO } from './date';
 import { createSeedDB } from './seed';
 import type { Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
 
@@ -279,6 +280,7 @@ export function editTask(db: StudyDB, actor: Member, taskId: string, patch: Task
 /**
  * 상태 변경은 역할에 따라 다릅니다.
  * - 완료 체크(verified): 부모는 아무 숙제나, 아이는 자기 숙제만. 누가·언제 완료했는지 남깁니다.
+ *   단, 아직 오지 않은 날짜(한국 시간 기준 오늘 이후)의 공부는 완료할 수 없습니다.
  * - 되돌리기: 완료된 숙제는 부모만 풀 수 있습니다. (DB 에서는 부모 관리 PIN 도 확인)
  */
 export function changeTaskStatus(
@@ -286,6 +288,8 @@ export function changeTaskStatus(
   actor: Member,
   taskId: string,
   status: TaskStatus,
+  /** 오늘 날짜 (한국 시간 기준 'YYYY-MM-DD') — 테스트에서 바꿔 넣을 수 있습니다. */
+  today: string = koreaTodayISO(),
 ): StudyDB {
   const task = requireTask(db, taskId);
   assertSameFamily(actor, task);
@@ -293,6 +297,9 @@ export function changeTaskStatus(
   if (status === 'verified') {
     if (!canCompleteTask(actor, task)) throw new PermissionError('내 숙제만 완료할 수 있어요.');
     if (task.status === 'verified') return db;
+    if (task.due_date > today) {
+      throw new PermissionError('아직 날짜가 되지 않은 공부예요. 그날이 되면 완료할 수 있어요.');
+    }
     return replaceTask(db, {
       ...task,
       status,

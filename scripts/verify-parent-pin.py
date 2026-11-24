@@ -91,8 +91,7 @@ def main() -> int:
             page.wait_for_selector('[data-testid="lock-parent"]', state='detached')
             sheet = page.locator('[role="dialog"]').inner_text()
             check('아이 프로필: 아이 목록만 보인다', '아이' in sheet and '첫째' in sheet)
-            check('아이 프로필: 부모(아빠·엄마) 항목 없음', '아빠' not in sheet and '엄마' not in sheet)
-            check('아이 프로필: 관리 잠금 버튼 없음', page.locator('[data-testid="lock-parent"]').count() == 0)
+            check('아이 프로필: 부모(아빠·엄마)는 PIN 잠금으로만 보인다', 'PIN' in sheet and 'PIN을 입력하면 열려요' in sheet)
             check('아이 프로필: 부모용 항목(확인·수정·삭제) 없음', '확인 · 수정 · 삭제 가능' not in sheet)
             page.locator('[role="dialog"] button[aria-label="닫기"]').click()
             page.wait_for_selector('[role="dialog"]', state='detached')
@@ -122,7 +121,11 @@ def main() -> int:
             page.wait_for_timeout(300)
             tomorrow_cards = page.locator('[data-testid="task-card"]').count()
             check('복사: 내일로 항목이 생김', tomorrow_cards == today_cards, f'{today_cards} → {tomorrow_cards}')
-            check('복사: 복사된 항목은 할 일', page.locator('[data-testid="complete-task"]').count() == tomorrow_cards)
+            check(
+                '복사: 복사된 항목은 할 일(아직 날짜 전이라 완료는 잠김)',
+                page.locator('[data-testid="complete-task"]').count() + page.locator('[data-testid="complete-locked"]').count()
+                == tomorrow_cards,
+            )
             page.close()
 
             # ---------------------------------------------------------------

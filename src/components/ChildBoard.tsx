@@ -1,4 +1,5 @@
 import { cx } from '../lib/cx';
+import { displayGrade } from '../lib/grade';
 import { memberTheme } from '../lib/theme';
 import { summarize } from '../lib/store';
 import type { Member, Task } from '../lib/types';
@@ -48,7 +49,9 @@ export function ChildBoard({
           <p className="flex items-center gap-1 text-[13.5px] font-extrabold text-slate-900">
             {member.name}
             {member.grade ? (
-              <span className="text-[9.5px] font-bold text-slate-400">{member.grade}</span>
+              <span data-testid={`member-grade-${member.id}`} className="text-[9.5px] font-bold text-slate-400">
+                {displayGrade(member.grade)}
+              </span>
             ) : null}
             {member.role === 'parent' ? (
               <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">

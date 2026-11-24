@@ -1,9 +1,9 @@
 import { cx } from '../lib/cx';
-import { formatTimeKo } from '../lib/date';
+import { formatTimeKo, isFutureDate } from '../lib/date';
 import { subjectMeta } from '../lib/theme';
 import type { Task } from '../lib/types';
 import { StatusBadge } from './StatusBadge';
-import { CheckIcon, CopyIcon, PencilIcon, TrashIcon, UndoIcon } from './icons';
+import { CheckIcon, CopyIcon, LockIcon, PencilIcon, TrashIcon, UndoIcon } from './icons';
 
 interface TaskCardProps {
   task: Task;
@@ -16,11 +16,15 @@ interface TaskCardProps {
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
   onCopy: (task: Task) => void;
+  /** 오늘 날짜 (한국 시간 기준 'YYYY-MM-DD') — 아직 안 온 날짜는 완료를 잠급니다. */
+  today?: string;
 }
 
-export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, onEdit, onDelete, onCopy }: TaskCardProps) {
+export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, onEdit, onDelete, onCopy, today }: TaskCardProps) {
   const subject = subjectMeta(task.subject);
   const verified = task.status === 'verified';
+  /** 그날이 되기 전에는 완료 버튼을 잠깁니다. (오늘·지난 날짜는 그대로 완료) */
+  const lockedUntilDue = !verified && isFutureDate(task.due_date, today);
   const pending = task.status === 'pending_verification';
   const completedAt = verified ? formatTimeKo(task.verified_at) : null;
   const canCopy = canManage || canComplete;
@@ -70,15 +74,30 @@ export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, o
 
             <div className="flex shrink-0 items-center gap-1">
               {!verified && canComplete ? (
-                <button
-                  type="button"
-                  data-testid="complete-task"
-                  onClick={() => onComplete(task)}
-                  className="inline-flex h-7 items-center gap-1 rounded-full bg-indigo-600 px-2.5 text-[10.5px] font-extrabold text-white shadow-sm shadow-indigo-600/30 transition active:scale-95"
-                >
-                  <CheckIcon className="h-3 w-3" strokeWidth={3} />
-                  완료
-                </button>
+                lockedUntilDue ? (
+                  <button
+                    type="button"
+                    data-testid="complete-locked"
+                    disabled
+                    aria-disabled="true"
+                    aria-label="그날이 되어야 완료할 수 있어요"
+                    title="그날이 되어야 완료할 수 있어요"
+                    className="inline-flex h-7 cursor-not-allowed items-center gap-1 rounded-full bg-slate-100 px-2.5 text-[10.5px] font-extrabold text-slate-400 ring-1 ring-slate-200/80"
+                  >
+                    <LockIcon className="h-3 w-3" strokeWidth={2.4} />
+                    완료
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="complete-task"
+                    onClick={() => onComplete(task)}
+                    className="inline-flex h-7 items-center gap-1 rounded-full bg-indigo-600 px-2.5 text-[10.5px] font-extrabold text-white shadow-sm shadow-indigo-600/30 transition active:scale-95"
+                  >
+                    <CheckIcon className="h-3 w-3" strokeWidth={3} />
+                    완료
+                  </button>
+                )
               ) : null}
 
               {verified && canManage ? (

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { cx } from '../lib/cx';
+import { displayGrade } from '../lib/grade';
 import { memberTheme } from '../lib/theme';
 import type { RealtimeState } from '../lib/storage';
 import type { SyncState } from '../lib/study-context';
@@ -128,7 +129,11 @@ export function ProfileSheet({
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1.5 text-[13px] font-extrabold text-slate-900">
                 {member.name}
-                {member.grade ? <span className="text-[9.5px] font-bold text-slate-400">{member.grade}</span> : null}
+                {member.grade ? (
+                  <span data-testid={`profile-grade-${member.id}`} className="text-[9.5px] font-bold text-slate-400">
+                    {displayGrade(member.grade)}
+                  </span>
+                ) : null}
                 {needsPin ? (
                   <span
                     data-testid={`lock-badge-${member.id}`}

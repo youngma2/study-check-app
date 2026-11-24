@@ -201,7 +201,11 @@ def main() -> int:
             page.wait_for_selector('text=기본 목록 7개를 추가했어요', timeout=8000)
             added = page.locator('[data-testid="task-card"]').count()
             check('기본 목록: 한 번 눌러 7개(첫째 3 · 둘째 4)가 들어간다', added == 7, f'{added}개')
-            check('기본 목록: 들어간 항목은 할 일 상태', page.locator('[data-testid="complete-task"]').count() == 7)
+            check(
+                '기본 목록: 들어간 항목은 할 일 상태(날짜 전이라 완료는 잠김)',
+                page.locator('[data-testid="complete-task"]').count() + page.locator('[data-testid="complete-locked"]').count() == 7
+                and page.locator('[data-testid="complete-locked"]').count() == 7,
+            )
             check('기본 목록: 금요일(월·수·금 패턴)에 하던 항목을 가져온다', '신문 쓰기' in page.inner_text('main'))
             check('기본 목록: 격주 상담 항목은 넣지 않는다', '상담' not in page.inner_text('main'))
             page.wait_for_timeout(2800)
