@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { cx } from '../lib/cx';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
-import { LockIcon } from './icons';
+import { LockIcon, ChevronLeftIcon } from './icons';
 
 interface ParentPinGateProps {
   familyName: string;
@@ -11,6 +11,8 @@ interface ParentPinGateProps {
   children: Member[];
   onSubmit: (pin: string) => Promise<{ ok: boolean; error?: string }>;
   onSwitchChild: (memberId: string) => void;
+  /** 아이 화면에서 '부모 관리로 돌아가기' 로 열렸을 때 — 취소하면 그 아이 화면으로 돌아갑니다. */
+  onCancel?: () => void;
 }
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
@@ -19,7 +21,7 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
  * 부모 관리 PIN 잠금 화면.
  * 아이 화면에서는 보이지 않고, 부모 시점(#as=mem_dad 등)으로 열면 가장 먼저 이 화면이 나옵니다.
  */
-export function ParentPinGate({ familyName, mode, children, onSubmit, onSwitchChild }: ParentPinGateProps) {
+export function ParentPinGate({ familyName, mode, children, onSubmit, onSwitchChild, onCancel }: ParentPinGateProps) {
   const [digits, setDigits] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,11 +103,14 @@ export function ParentPinGate({ familyName, mode, children, onSubmit, onSwitchCh
       } else if (event.key === 'Backspace') {
         event.preventDefault();
         press('del');
+      } else if (event.key === 'Escape' && onCancel) {
+        event.preventDefault();
+        onCancel();
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [press]);
+  }, [press, onCancel]);
 
   return (
     <div
@@ -113,6 +118,18 @@ export function ParentPinGate({ familyName, mode, children, onSubmit, onSwitchCh
       className="flex min-h-screen flex-col bg-[#f5f6fa] px-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-[calc(1.5rem+env(safe-area-inset-top))]"
     >
       <div className="mx-auto w-full max-w-md flex-1">
+        {onCancel ? (
+          <button
+            type="button"
+            data-testid="cancel-parent-gate"
+            onClick={onCancel}
+            className="mt-1 flex items-center gap-0.5 rounded-full py-1.5 pl-1 pr-2.5 text-[11.5px] font-bold text-slate-400 transition hover:bg-white hover:text-slate-600 active:scale-95"
+          >
+            <ChevronLeftIcon className="h-3.5 w-3.5" />
+            아이 화면으로
+          </button>
+        ) : null}
+
         <div className="mt-6 flex flex-col items-center text-center">
           <div className="grid h-14 w-14 place-items-center rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-500 text-white shadow-lg shadow-indigo-500/25">
             <LockIcon className="h-7 w-7" strokeWidth={2.2} />

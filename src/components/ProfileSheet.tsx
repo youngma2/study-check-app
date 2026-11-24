@@ -15,6 +15,8 @@ interface ProfileSheetProps {
   /** 지금 보고 있는 사람이 부모인지 — 아이 화면에서는 부모 전환 목록을 아예 숨깁니다. */
   viewerIsParent: boolean;
   onSelect: (memberId: string) => void;
+  /** 아이 화면에서 부모 관리로 돌아가기 — PIN 확인 화면을 엽니다. */
+  onRequestParent: () => void;
   onLock: () => void;
   onRename: (memberId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
   onResetDemo: () => void | Promise<void>;
@@ -46,6 +48,7 @@ export function ProfileSheet({
   currentMemberId,
   viewerIsParent,
   onSelect,
+  onRequestParent,
   onLock,
   onRename,
   onResetDemo,
@@ -235,6 +238,21 @@ export function ProfileSheet({
             </p>
           )}
         </div>
+
+        {!viewerIsParent ? (
+          <button
+            type="button"
+            data-testid="request-parent-pin"
+            onClick={() => {
+              onRequestParent();
+              onClose();
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white px-3 py-2.5 text-[10.5px] font-bold text-slate-400 ring-1 ring-slate-900/5 transition hover:bg-slate-50 hover:text-slate-500 active:scale-[0.99]"
+          >
+            <LockIcon className="h-3 w-3" />
+            부모 관리로 돌아가기 (PIN 필요)
+          </button>
+        ) : null}
 
         {viewerIsParent ? (
           <button

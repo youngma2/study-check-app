@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppHeader } from './components/AppHeader';
 import { AddTaskSheet } from './components/AddTaskSheet';
 import { ChildBoard } from './components/ChildBoard';
@@ -8,7 +8,8 @@ import { ParentPinGate } from './components/ParentPinGate';
 import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
 import { CopyIcon, LockIcon, PlusIcon, UndoIcon } from './components/icons';
-import { addDays, formatTimeKo, fromISODate, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
+import { addDays, formatTimeKo, fromISODate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
+import { defaultItemsForDay } from './lib/defaults';
 import { summarize } from './lib/store';
 import { useStudy, type ActionResult } from './lib/study-context';
 import type { NewTaskInput, Task } from './lib/types';
@@ -42,6 +43,11 @@ export default function App() {
   const [formMemberId, setFormMemberId] = useState<string>(currentMember.id);
   const [copySources, setCopySources] = useState<Task[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  /** 아이 화면에서 부모 관리로 돌아갈 때: PIN 화면을 반드시 거치고, 취소하면 이 아이 화면으로 돌아옵니다. */
+  const [parentGateForced, setParentGateForced] = useState(false);
+  const [parentGateReturnTo, setParentGateReturnTo] = useState<string | null>(null);
+  const [fillingDefaults, setFillingDefaults] = useState(false);
+  const fillingDefaultsRef = useRef(false);
 
   const notify = useCallback((message: string) => setToast(message), []);
 
@@ -148,6 +154,76 @@ export default function App() {
 
   const openCopyForTask = (task: Task) => setCopySources([task]);
 
+  /**
+   * 아이 화면 → 부모 관리. 부모 화면은 이 경우에도 항상 PIN 확인부터 시작하고,
+   * 취소하면 보던 아이 화면으로 그대로 돌아갑니다(잠금은 풀리지 않음).
+   */
+  const handleRequestParent = () => {
+    const target =
+      study.members.find((member) => member.role === 'parent' && member.id === 'mem_dad') ?? study.parents[0];
+    if (!target) return;
+    setProfileOpen(false);
+    setParentGateReturnTo(currentMember.id);
+    setParentGateForced(true);
+    study.setCurrentMember(target.id);
+  };
+
+  const cancelParentGate = () => {
+    const back = parentGateReturnTo;
+    setParentGateForced(false);
+    setParentGateReturnTo(null);
+    if (back) study.setCurrentMember(back);
+  };
+
+  /**
+   * 기본 목록 — 고른 날짜에 그 아이가 같은 요일 패턴(토 / 월·수·금 / 화·목)에 하던 항목을
+   * 한 번에 '할 일'로 넣습니다. 지난 기록이 없으면 그 아이의 빠른 추가 항목을 씁니다.
+   * 공휴일·일요일에는 넣지 않습니다.
+   */
+  const handleFillDefaults = async () => {
+    if (!isParent || fillingDefaultsRef.current) return;
+    if (isRestDay(selectedDate)) {
+      notify('쉬는 날에는 기본 목록을 넣지 않아요');
+      return;
+    }
+
+    fillingDefaultsRef.current = true;
+    setFillingDefaults(true);
+    let added = 0;
+    let failed = 0;
+    let firstError: string | undefined;
+    try {
+      for (const member of visibleMembers) {
+        for (const item of defaultItemsForDay(study.db.tasks, member, selectedDate)) {
+          const result = await addTask({
+            member_id: member.id,
+            title: item.title,
+            subject: item.subject,
+            due_date: selectedDate,
+          });
+          if (result.ok) added += 1;
+          else {
+            failed += 1;
+            firstError = firstError ?? result.error;
+          }
+        }
+      }
+    } finally {
+      fillingDefaultsRef.current = false;
+      setFillingDefaults(false);
+    }
+
+    if (added > 0) {
+      notify(
+        failed > 0
+          ? `기본 목록 ${added}개를 추가했어요 · ${failed}개는 넣지 못했어요`
+          : `기본 목록 ${added}개를 추가했어요`,
+      );
+      return;
+    }
+    notify(failed > 0 ? firstError ?? '기본 목록을 넣지 못했어요' : '기본 목록이 이미 다 들어 있어요');
+  };
+
   /** 어제 공부를 오늘(보고 있는 날)로 한 번에 가져옵니다. */
   const handleCopyYesterday = async () => {
     const yesterday = toISODate(addDays(fromISODate(selectedDate), -1));
@@ -169,7 +245,7 @@ export default function App() {
     notify(parts.join(' · '));
   };
 
-  const parentLocked = isParent && !parentUnlocked;
+  const parentLocked = isParent && (!parentUnlocked || parentGateForced);
 
   const defaultAddMemberId = isParent
     ? (visibleMembers[0]?.id ?? currentMember.id)
@@ -182,8 +258,20 @@ export default function App() {
           familyName={study.familyName}
           mode={parentPinSetupRequired ? 'setup' : 'unlock'}
           children={study.children}
-          onSubmit={parentPinSetupRequired ? setParentPin : unlockParent}
-          onSwitchChild={study.setCurrentMember}
+          onSubmit={async (pin) => {
+            const result = parentPinSetupRequired ? await setParentPin(pin) : await unlockParent(pin);
+            if (result.ok) {
+              setParentGateForced(false);
+              setParentGateReturnTo(null);
+            }
+            return result;
+          }}
+          onSwitchChild={(memberId) => {
+            setParentGateForced(false);
+            setParentGateReturnTo(null);
+            study.setCurrentMember(memberId);
+          }}
+          onCancel={parentGateReturnTo ? cancelParentGate : undefined}
         />
         {toast ? (
           <div className="pointer-events-none fixed inset-x-0 bottom-8 z-40 flex justify-center px-6">
@@ -219,6 +307,22 @@ export default function App() {
         />
 
         <DayOverview dateIso={selectedDate} summary={daySummary} />
+
+        {isParent ? (
+          <button
+            type="button"
+            data-testid="fill-defaults"
+            onClick={handleFillDefaults}
+            disabled={fillingDefaults}
+            className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-indigo-50 py-2.5 text-[12px] font-extrabold text-indigo-700 ring-1 ring-indigo-200 transition active:scale-[0.98] disabled:opacity-60"
+          >
+            <span aria-hidden>📋</span>
+            기본 목록
+            <span className="text-[9.5px] font-bold text-indigo-400">
+              {fillingDefaults ? '넣는 중…' : '이 날 한 번에 넣기'}
+            </span>
+          </button>
+        ) : null}
 
         <div className="mt-2.5 flex items-center gap-1.5">
           <button
@@ -347,6 +451,7 @@ export default function App() {
         currentMemberId={currentMember.id}
         viewerIsParent={isParent}
         onSelect={study.setCurrentMember}
+        onRequestParent={handleRequestParent}
         onLock={lockParent}
         onRename={renameMember}
         onResetDemo={async () => {
