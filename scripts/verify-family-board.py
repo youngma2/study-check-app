@@ -315,6 +315,46 @@ def main() -> int:
             check('한마디 지우기: 개수가 줄어든다', page.locator('[data-testid="family-note"]').count() == before_notes - 1)
             check('한마디 지우기: 엄마 글은 남는다', '내일 학원 6시 30분이에요' in page.inner_text('[data-testid="family-notes"]'))
 
+            # ---------------------------------------------------------------
+            # I. 📞 통화 1·2 는 아이 화면에는 안 보이고 부모 화면에만
+            # ---------------------------------------------------------------
+            page.evaluate(
+                """({ dbKey, saturday }) => {
+                    const db = JSON.parse(localStorage.getItem(dbKey));
+                    const now = new Date().toISOString();
+                    db.tasks.push(
+                      { id: 't_c1_20261128_call1', family_id: db.families[0].id, member_id: 'mem_child1',
+                        title: '🏫 하교 16:05 → 📞 통화 1 (17:05)', subject: 'etc', due_date: saturday,
+                        status: 'todo', created_by: 'mem_child1', created_at: now, verified_by: null, verified_at: null },
+                      { id: 't_c1_20261128_call2', family_id: db.families[0].id, member_id: 'mem_child1',
+                        title: '📞 통화 2 · 공부 진행 확인 (18:30)', subject: 'etc', due_date: saturday,
+                        status: 'todo', created_by: 'mem_child1', created_at: now, verified_by: null, verified_at: null },
+                    );
+                    localStorage.setItem(dbKey, JSON.stringify(db));
+                }""",
+                {'dbKey': DB_KEY, 'saturday': saturday.isoformat()},
+            )
+            page.reload()
+            page.wait_for_selector('[data-testid="open-profile"]')
+            goto_day(page, saturday)
+            child_main = page.inner_text('main')
+            check('통화 항목: 아이 화면에는 통화 1·2 가 안 보인다',
+                  '통화' not in child_main and '하교' not in child_main, child_main.replace('\n', ' / ')[:90])
+            check('통화 항목: 아이 날짜 요약에서도 빠진다', '전체 1개' in child_main, child_main.replace('\n', ' / ')[:60])
+            check('통화 항목: 아이 보드 카드도 1개만', page.locator('[data-testid="task-card"]').count() == 1,
+                  str(page.locator('[data-testid="task-card"]').count()))
+
+            open_profile(page)
+            page.click('[data-testid="profile-row-mem_dad"]')
+            page.wait_for_selector('[data-testid="parent-pin-gate"]')
+            type_pin(page, DEMO_PIN)
+            page.wait_for_selector('[data-testid="open-profile"]', timeout=8000)
+            goto_day(page, saturday)
+            dad_main = page.inner_text('main')
+            check('통화 항목: 부모 화면에는 통화 1 이 보인다', '통화 1' in dad_main)
+            check('통화 항목: 부모 화면에는 통화 2 도 보인다', '통화 2' in dad_main)
+            check('통화 항목: 부모 화면에는 하교 시간도 보인다', '하교' in dad_main)
+
             check('JS 오류 없음', not errors, ' / '.join(errors[:3]))
 
             browser.close()

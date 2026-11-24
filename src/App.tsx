@@ -17,6 +17,15 @@ import { summarize } from './lib/store';
 import { useStudy, type ActionResult } from './lib/study-context';
 import type { NewTaskInput, Task } from './lib/types';
 
+/**
+ * 📞 통화 1·2 (쪼꼬가 거는 확인 전화) 항목.
+ * 아이 화면은 공부에만 집중할 수 있게 이 항목을 빼고 보여 주고,
+ * 부모 화면에서는 하교·통화 시간과 완료 체크를 그대로 봅니다.
+ */
+function isCallTask(task: Task): boolean {
+  return task.title.includes('📞 통화') || task.id.includes('_call1') || task.id.includes('_call2');
+}
+
 export default function App() {
   const study = useStudy();
   const {
@@ -118,13 +127,27 @@ export default function App() {
     [isParent, children, currentMember.id],
   );
 
+  const showCallTasks = isParent;
+
+  /**
+   * 화면에서 보는 항목 — 아이 시점에서는 📞 통화 항목을 빼고 보여 줍니다.
+   * (목록·진행률·날짜 요약·복사까지 모두 이 함수를 씁니다)
+   */
+  const tasksForView = useCallback(
+    (memberId: string, dateIso: string) => {
+      const list = tasksFor(memberId, dateIso);
+      return showCallTasks ? list : list.filter((task) => !isCallTask(task));
+    },
+    [tasksFor, showCallTasks],
+  );
+
   /**
    * 부모 화면에서는 그 날 부모(아빠·엄마)에게 배정된 할 일도 같이 보여 줍니다.
    * (예: 토요일 아빠의 '독서록 검사') 아이 화면은 그대로 자기 것만 봅니다.
    */
   const parentBoardMembers = useMemo(
-    () => (isParent ? parents.filter((member) => tasksFor(member.id, selectedDate).length > 0) : []),
-    [isParent, parents, selectedDate, tasksFor],
+    () => (isParent ? parents.filter((member) => tasksForView(member.id, selectedDate).length > 0) : []),
+    [isParent, parents, selectedDate, tasksForView],
   );
   const dayBoardMembers = useMemo(
     () => [...visibleMembers, ...parentBoardMembers],
@@ -144,16 +167,16 @@ export default function App() {
     const map: Record<string, DayProgress> = {};
     for (const day of weekDays) {
       const iso = toISODate(day);
-      const dayTasks = progressMembers.flatMap((member) => tasksFor(member.id, iso));
+      const dayTasks = progressMembers.flatMap((member) => tasksForView(member.id, iso));
       const summary = summarize(dayTasks);
       map[iso] = { total: summary.total, verified: summary.verified, pending: summary.pending };
     }
     return map;
-  }, [weekDays, progressMembers, tasksFor]);
+  }, [weekDays, progressMembers, tasksForView]);
 
   const dayTasks = useMemo(
-    () => dayBoardMembers.flatMap((member) => tasksFor(member.id, selectedDate)),
-    [dayBoardMembers, selectedDate, tasksFor],
+    () => dayBoardMembers.flatMap((member) => tasksForView(member.id, selectedDate)),
+    [dayBoardMembers, selectedDate, tasksForView],
   );
   const daySummary = useMemo(() => summarize(dayTasks), [dayTasks]);
   const weekPending = useMemo(
@@ -305,7 +328,7 @@ export default function App() {
   /** 어제 공부를 오늘(보고 있는 날)로 한 번에 가져옵니다. */
   const handleCopyYesterday = async () => {
     const yesterday = toISODate(addDays(fromISODate(selectedDate), -1));
-    const sources = visibleMembers.flatMap((member) => tasksFor(member.id, yesterday));
+    const sources = visibleMembers.flatMap((member) => tasksForView(member.id, yesterday));
     if (sources.length === 0) {
       notify('어제는 복사할 공부가 없었어요');
       return;
@@ -509,7 +532,7 @@ export default function App() {
             <ChildBoard
               key={member.id}
               member={member}
-              tasks={tasksFor(member.id, selectedDate)}
+              tasks={tasksForView(member.id, selectedDate)}
               canAdd={isParent || member.id === currentMember.id}
               canComplete={isParent || member.id === currentMember.id}
               canManage={isParent}
@@ -529,7 +552,7 @@ export default function App() {
                 <ChildBoard
                   key={member.id}
                   member={member}
-                  tasks={tasksFor(member.id, selectedDate)}
+                  tasks={tasksForView(member.id, selectedDate)}
                   canAdd
                   canComplete
                   canManage
