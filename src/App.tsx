@@ -82,10 +82,10 @@ export default function App() {
     setFormOpen(true);
   };
 
-  const handleSave = (input: NewTaskInput, editingId?: string): ActionResult => {
+  const handleSave = async (input: NewTaskInput, editingId?: string): Promise<ActionResult> => {
     const result = editingId
-      ? editTask(editingId, { title: input.title, subject: input.subject, due_date: input.due_date })
-      : addTask(input);
+      ? await editTask(editingId, { title: input.title, subject: input.subject, due_date: input.due_date })
+      : await addTask(input);
 
     if (result.ok) {
       setSelectedDate(input.due_date);
@@ -95,24 +95,24 @@ export default function App() {
     return result;
   };
 
-  const handleRequest = (task: Task) => {
-    const result = setStatus(task.id, 'pending_verification');
+  const handleRequest = async (task: Task) => {
+    const result = await setStatus(task.id, 'pending_verification');
     notify(result.ok ? '부모님께 완료 요청을 보냈어요' : result.error ?? '요청하지 못했어요');
   };
 
-  const handleVerify = (task: Task) => {
-    const result = setStatus(task.id, 'verified');
+  const handleVerify = async (task: Task) => {
+    const result = await setStatus(task.id, 'verified');
     notify(result.ok ? '확인 완료! 잘했어요 🎉' : result.error ?? '확인하지 못했어요');
   };
 
-  const handleRevert = (task: Task) => {
-    const result = setStatus(task.id, 'todo');
+  const handleRevert = async (task: Task) => {
+    const result = await setStatus(task.id, 'todo');
     notify(result.ok ? '할 일로 되돌렸어요' : result.error ?? '되돌리지 못했어요');
   };
 
-  const handleDelete = (task: Task) => {
+  const handleDelete = async (task: Task) => {
     if (!window.confirm(`'${task.title}' 항목을 삭제할까요?`)) return;
-    const result = removeTask(task.id);
+    const result = await removeTask(task.id);
     notify(result.ok ? '삭제했어요' : result.error ?? '삭제하지 못했어요');
   };
 
@@ -147,6 +147,29 @@ export default function App() {
         />
 
         <DayOverview dateIso={selectedDate} summary={daySummary} />
+
+        {study.syncState === 'setup' ? (
+          <div
+            data-testid="setup-banner"
+            className="mt-3 rounded-2xl bg-sky-50 p-3 ring-1 ring-sky-200/70"
+          >
+            <p className="text-[11px] font-extrabold text-sky-900">가족 동기화 준비 중</p>
+            <p className="mt-1 text-[10.5px] font-semibold leading-relaxed text-sky-800/90">
+              Supabase에 넣을 SQL을 아직 실행하지 않았어요. 그 전까지는 이 기기에만 저장됩니다.
+              {' '}SQL을 한 번 실행하면 폰끼리 실시간으로 이어져요.
+            </p>
+          </div>
+        ) : null}
+
+        {study.syncState === 'error' ? (
+          <div className="mt-3 rounded-2xl bg-amber-50 p-3 ring-1 ring-amber-200/70">
+            <p className="text-[11px] font-extrabold text-amber-900">클라우드에 연결하지 못했어요</p>
+            <p className="mt-1 text-[10.5px] font-semibold leading-relaxed text-amber-800/90">
+              마지막으로 받은 목록을 보여 주고 있어요. 연결되면 자동으로 다시 맞춰지고,
+              그 전까지는 바꾼 내용을 저장하지 않아요.
+            </p>
+          </div>
+        ) : null}
 
         {!isParent ? (
           <div className="mt-3 flex items-start gap-2 rounded-2xl bg-amber-50/80 p-3 ring-1 ring-amber-200/70">
@@ -220,13 +243,14 @@ export default function App() {
         members={study.members}
         currentMemberId={currentMember.id}
         onSelect={study.setCurrentMember}
-        onResetDemo={() => {
-          const result = resetDemo();
+        onResetDemo={async () => {
+          const result = await resetDemo();
           notify(result.ok ? '샘플 데이터로 되돌렸어요' : result.error ?? '초기화하지 못했어요');
         }}
-        canReset={isParent}
+        canReset={isParent && study.storageKind === 'local'}
         storageKind={study.storageKind}
         syncState={study.syncState}
+        realtimeState={study.realtimeState}
       />
 
       {toast ? (

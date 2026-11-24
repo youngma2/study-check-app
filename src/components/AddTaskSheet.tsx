@@ -13,7 +13,7 @@ interface AddTaskSheetProps {
   defaultDate: string;
   defaultMemberId: string;
   editing: Task | null;
-  onSave: (input: NewTaskInput, editingId?: string) => ActionResult;
+  onSave: (input: NewTaskInput, editingId?: string) => Promise<ActionResult>;
 }
 
 const inputClass =
@@ -64,22 +64,30 @@ export function AddTaskSheet({
     setError(null);
   };
 
-  const handleSubmit = (event: FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (saving) return;
     const trimmed = title.trim();
     if (!trimmed) {
       setError('무엇을 공부하는지 적어 주세요.');
       return;
     }
-    const result = onSave(
-      { member_id: memberId, title: trimmed, subject, due_date: date },
-      editing?.id,
-    );
-    if (!result.ok) {
-      setError(result.error ?? '저장하지 못했어요.');
-      return;
+    setSaving(true);
+    try {
+      const result = await onSave(
+        { member_id: memberId, title: trimmed, subject, due_date: date },
+        editing?.id,
+      );
+      if (!result.ok) {
+        setError(result.error ?? '저장하지 못했어요.');
+        return;
+      }
+      onClose();
+    } finally {
+      setSaving(false);
     }
-    onClose();
   };
 
   return (
@@ -193,9 +201,10 @@ export function AddTaskSheet({
         <button
           type="submit"
           data-testid="save-task"
-          className="w-full rounded-2xl bg-indigo-600 py-3.5 text-[13px] font-extrabold text-white shadow-float transition active:scale-[0.99]"
+          disabled={saving}
+          className="w-full rounded-2xl bg-indigo-600 py-3.5 text-[13px] font-extrabold text-white shadow-float transition active:scale-[0.99] disabled:opacity-60"
         >
-          {editing ? '수정 저장' : '추가하기'}
+          {saving ? '저장 중…' : editing ? '수정 저장' : '추가하기'}
         </button>
       </form>
     </Sheet>

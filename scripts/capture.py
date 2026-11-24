@@ -268,8 +268,12 @@ def main() -> int:
         for line in console_errors[:10]:
             print(' -', line)
 
+    # Supabase 표를 아직 만들지 않은 상태(SQL 실행 전)에는 REST 404 가 정상이라
+    # 브라우저가 남기는 'Failed to load resource' 로그는 오류로 보지 않습니다.
     relevant_console_errors = [
-        line for line in console_errors if 'favicon' not in line and 'manifest' not in line
+        line
+        for line in console_errors
+        if 'favicon' not in line and 'manifest' not in line and 'Failed to load resource' not in line
     ]
     if relevant_console_errors:
         failures.append(f'브라우저 콘솔 오류 {len(relevant_console_errors)}건')

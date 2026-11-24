@@ -10,6 +10,7 @@ import type { Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
 
 export const DB_VERSION = 1;
 export const DB_STORAGE_KEY = 'study-check.db.v1';
+export const CLOUD_CACHE_KEY = 'study-check.cloud.v1';
 export const MEMBER_STORAGE_KEY = 'study-check.member.v1';
 
 export class PermissionError extends Error {
@@ -54,6 +55,31 @@ export function saveLocalDB(db: StudyDB): void {
   } catch (error) {
     // 사생활 보호 모드나 용량 초과: 화면은 계속 쓸 수 있게 두고 콘솔에만 남깁니다.
     console.warn('[study-check] localStorage 저장 실패', error);
+  }
+}
+
+/**
+ * 클라우드에서 마지막으로 받은 목록의 사본.
+ * 잠깐 연결이 끊겨도 '샘플 데이터' 대신 가족의 진짜 목록을 보여 주기 위한 것입니다(읽기 전용 캐시).
+ */
+export function loadCloudCache(): StudyDB | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(CLOUD_CACHE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isStudyDB(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveCloudCache(db: StudyDB): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(CLOUD_CACHE_KEY, JSON.stringify(db));
+  } catch {
+    // 캐시는 편의 기능이라 실패해도 조용히 넘어갑니다.
   }
 }
 

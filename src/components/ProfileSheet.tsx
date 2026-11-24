@@ -1,5 +1,6 @@
 import { cx } from '../lib/cx';
 import { memberTheme } from '../lib/theme';
+import type { RealtimeState } from '../lib/storage';
 import type { SyncState } from '../lib/study-context';
 import type { Member } from '../lib/types';
 import { Sheet } from './Sheet';
@@ -11,17 +12,26 @@ interface ProfileSheetProps {
   members: Member[];
   currentMemberId: string;
   onSelect: (memberId: string) => void;
-  onResetDemo: () => void;
+  onResetDemo: () => void | Promise<void>;
   canReset: boolean;
   storageKind: 'local' | 'supabase';
   syncState: SyncState;
+  realtimeState: RealtimeState;
 }
 
 const SYNC_TEXT: Record<SyncState, string> = {
   local: '이 기기에 저장 중 (localStorage)',
   syncing: '클라우드에서 불러오는 중…',
-  synced: 'Supabase와 동기화됨',
+  synced: '가족과 실시간 동기화 중 (Supabase)',
+  setup: 'Supabase SQL 실행을 기다리는 중',
   error: '클라우드 연결 실패 · 이 기기에 저장 중',
+};
+
+const REALTIME_TEXT: Record<RealtimeState, string> = {
+  off: '실시간 연결 꿈김',
+  connecting: '실시간 연결 중…',
+  live: '실시간 연결됨',
+  error: '실시간 연결 꿈김 · 잠시 뒤 새로고침',
 };
 
 export function ProfileSheet({
@@ -34,6 +44,7 @@ export function ProfileSheet({
   canReset,
   storageKind,
   syncState,
+  realtimeState,
 }: ProfileSheetProps) {
   const parents = members.filter((member) => member.role === 'parent');
   const children = members.filter((member) => member.role === 'child');
@@ -84,7 +95,7 @@ export function ProfileSheet({
       open={open}
       onClose={onClose}
       title="누구로 볼까요?"
-      subtitle="역할을 바꾸면 권한이 어떻게 다른지 바로 확인할 수 있어요. (데모 모드)"
+      subtitle="이름을 누르면 그 사람 시점으로 바뀝니다. 역할에 따라 할 수 있는 일이 달라요."
     >
       <div className="space-y-4 pb-1">
         <div>
@@ -100,19 +111,34 @@ export function ProfileSheet({
           <p className="text-[10.5px] font-semibold text-slate-500">
             <span className="font-extrabold text-slate-700">저장 상태</span> · {SYNC_TEXT[syncState]}
           </p>
-          {storageKind === 'local' ? (
+          {storageKind === 'supabase' ? (
+            <p className="mt-1 flex items-center gap-1.5 text-[10px] leading-relaxed text-slate-400">
+              <span
+                aria-hidden
+                className={cx(
+                  'inline-block h-1.5 w-1.5 rounded-full',
+                  realtimeState === 'live'
+                    ? 'bg-emerald-500'
+                    : realtimeState === 'error'
+                      ? 'bg-rose-500'
+                      : 'bg-slate-300',
+                )}
+              />
+              {REALTIME_TEXT[realtimeState]}
+            </p>
+          ) : (
             <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
               데모 데이터예요. Supabase를 연결하면 가족 모두 같은 목록을 봅니다.
             </p>
-          ) : null}
+          )}
         </div>
 
         {canReset ? (
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
               if (window.confirm('이 기기의 목록을 샘플 데이터로 되돌릴까요? 지금까지 추가한 항목은 사라져요.')) {
-                onResetDemo();
+                await onResetDemo();
                 onClose();
               }
             }}
@@ -122,7 +148,9 @@ export function ProfileSheet({
           </button>
         ) : (
           <p className="px-1 text-center text-[10px] font-semibold text-slate-400">
-            샘플 초기화는 부모만 할 수 있어요.
+            {storageKind === 'supabase'
+              ? '가족끼리 연결 중에는 여기서 초기화하지 않아요.'
+              : '샘플 초기화는 부모만 할 수 있어요.'}
           </p>
         )}
       </div>
