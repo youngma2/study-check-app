@@ -167,6 +167,24 @@ def install_mock(page, captured, reject_status=None, state=None):
     page.route(re.compile(r'https://trhcatbuoslyjdhezobz\.supabase\.co/rest/v1/.*'), handle)
 
 
+def install_missing_schema(page):
+    """SQL 실행 전 상태(표 없음)를 모의합니다. 실제 DB 상태와 무관하게 검사할 수 있습니다."""
+
+    def handle(route, request):
+        route.fulfill(
+            status=404,
+            content_type='application/json',
+            body=json.dumps({
+                "code": "PGRST205",
+                "details": None,
+                "hint": None,
+                "message": "Could not find the table 'public.tasks' in the schema cache",
+            }),
+        )
+
+    page.route(re.compile(r'https://trhcatbuoslyjdhezobz\.supabase\.co/rest/v1/.*'), handle)
+
+
 def open_profile(page):
     page.click('[data-testid="open-profile"]')
     page.wait_for_timeout(250)
@@ -192,9 +210,10 @@ def main() -> int:
             )
 
             # ---------------- A) SQL 실행 전 ----------------
-            print('\n[A] SQL 실행 전 (실제 Supabase 표 없음)')
+            print('\n[A] SQL 실행 전 (표 없음 응답을 모의)')
             ctx = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
             page = ctx.new_page()
+            install_missing_schema(page)
             errors: list[str] = []
             bad: list[str] = []
             page.on('pageerror', lambda e: errors.append(str(e)))

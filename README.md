@@ -99,6 +99,8 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 
 - **실시간**: `tasks` · `family_members` · `families` 를 `supabase_realtime` publication 에 넣고
   앱이 `postgres_changes` 를 구독합니다. 아이가 완료 요청을 누르면 부모 폰에 **새로고침 없이** 반영됩니다.
+  - 삭제까지 실시간으로 보내려면 두 테이블에 `replica identity full` 이 필요합니다(schema.sql 에 포함).
+  - 앱을 다시 열거나 화면에 돌아오면 최신 목록을 한 번 받아 와서, 백그라운드 중 놓친 변경도 맞춥니다.
 - 앱은 화면을 먼저 바꾸고(낙관적 반영) RPC 결과를 기다립니다. 서버가 거부하면 원래 상태로 되돌리고 이유를 보여 줍니다.
 
 > 가족 링크(`#as=...`)를 아는 사람은 그 사람 시점으로 열 수 있습니다. 링크를 공개된 곳에 올리지 마세요.
@@ -147,6 +149,7 @@ src/
 supabase/schema.sql       테이블 + RLS + study_* RPC + Realtime + 가족/이번 주 시드
 scripts/gen-setup.mjs     schema.sql → public/setup.html (SQL 복사 버튼 페이지)
 scripts/verify-sync.py    동기화 전/후 화면 자동 검증
+scripts/verify-live-sync.py  라이브 사이트에서 두 사람 시점 실시간 검증(테스트 항목 자동 정리)
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백)
 public/icons/             앱 아이콘(192/512/maskable/apple)
@@ -180,6 +183,12 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
   - 아이: 자기 숙제 추가·완료 요청 가능, 남의 숙제 추가·수정·삭제·자기 확인 완료 차단
   - 부모: 확인 완료(verified_by 기록)·되돌리기·수정·삭제 가능, 없는 사용자 거부
 - Realtime: publishable 키로 WebSocket 구독 `SUBSCRIBED` 확인 (로그인·JWT 없이 동작)
+- **라이브 실시간 동기화 검증** (`python3 scripts/verify-live-sync.py`, 실제 사이트 + 실제 DB, 브라우저 두 개)
+  - 부모(`#as=mem_dad`)가 둘째 숙제 추가 → 둘째(`#as=mem_child2`) 화면에 새로고침 없이 등장
+  - 둘째 완료 요청 → 부모 화면에 즉시 `확인 대기`
+  - 부모 확인 완료 → 둘째 화면에 즉시 `부모 확인 완료`
+  - 부모 삭제 → 둘째 화면에서 즉시 사라짐 (`replica identity full` 적용 후)
+  - 테스트 항목은 자동 삭제, 숙제 수 39개 원복 확인
 - `python3 scripts/capture.py` — 화면 흐름 스모크 테스트(부모/아이 시점, 추가·수정·삭제, 확인 완료)
 - 역할 링크: `#as=mem_dad` · `#as=mem_mom` · `#as=mem_child1` · `#as=mem_child2` 모두 해당 시점으로 전환
 

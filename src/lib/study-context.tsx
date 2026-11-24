@@ -199,8 +199,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
               : prev.tasks.some((task) => task.id === event.task.id)
                 ? { ...prev, tasks: prev.tasks.map((task) => (task.id === event.task.id ? event.task : task)) }
                 : { ...prev, tasks: [...prev.tasks, event.task] };
-          break;
-        case 'member':
+          break;        case 'member':
           next =
             event.event === 'delete'
               ? { ...prev, members: prev.members.filter((member) => member.id !== event.memberId) }
@@ -240,6 +239,40 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       setRealtimeState('off');
     };
   }, [cloud, mode, syncState, familyId, applyRemote]);
+
+  /** 최신 스냅샷을 한 번 다시 받아 옵니다(실시간으로 놓친 변경을 메우는 용도). */
+  const refreshFromCloud = useCallback(() => {
+    if (!cloud) return;
+    void cloud
+      .load()
+      .then((remote) => {
+        if (remote && remote.members.length > 0) {
+          applyDb(remote);
+          saveCloudCache(remote);
+        }
+      })
+      .catch(() => {
+        /* 조용히 넘어갑니다. 다음 기회에 다시 맞춥니다. */
+      });
+  }, [cloud, applyDb]);
+
+  // 폰에서 앱을 다시 열었을 때(백그라운드 동안 놓친 변경) 최신 목록으로 맞춥니다.
+  useEffect(() => {
+    if (!cloud || mode !== 'supabase' || syncState !== 'synced') return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshFromCloud();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [cloud, mode, syncState, refreshFromCloud]);
+
+  // 실시간 채널이 끊겼다가 다시 붙으면 놓친 변경을 받아 옵니다.
+  const prevRealtime = useRef<RealtimeState>('off');
+  useEffect(() => {
+    const was = prevRealtime.current;
+    prevRealtime.current = realtimeState;
+    if (was === 'error' && realtimeState === 'live') refreshFromCloud();
+  }, [realtimeState, refreshFromCloud]);
 
   /**
    * 화면을 먼저 바꾸고(낙관적 반영) 서버에 한 건만 보냅니다.

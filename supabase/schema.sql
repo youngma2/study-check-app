@@ -72,6 +72,11 @@ create index if not exists tasks_pending_idx
   on public.tasks (family_id, due_date) where status = 'pending_verification';
 create index if not exists family_members_family_idx on public.family_members (family_id);
 
+-- Realtime 삭제 이벤트: RLS + family_id 필터를 쓰려면 예전 행 전체가 필요합니다.
+-- (기본 replica identity 는 기본키만 보내서 DELETE 가 구독자에게 전달되지 않습니다.)
+alter table public.tasks          replica identity full;
+alter table public.family_members replica identity full;
+
 -- ----------------------------------------------------------------------------
 -- 2. RLS — 읽기는 열고, 직접 쓰기는 막습니다(쓰기는 3번의 RPC 로만).
 -- ----------------------------------------------------------------------------
