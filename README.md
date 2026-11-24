@@ -142,6 +142,7 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 | `study_verify_parent_pin` | 부모 관리 PIN 확인 | 누구나(맞는지 boolean 만) |
 | `study_set_parent_pin` | 부모 관리 PIN 정하기/바꾸기 | 처음 정할 때만 PIN 없이, 이후에는 지금 PIN 필요 |
 | `study_rename_member` | 구성원 이름 바꾸기 | 부모 + `p_pin` |
+| `study_update_member_presets` | 구성원 '빠른 추가' 항목(presets)을 `[{"title":"...","subject":"..."}]` 배열로 바꾸기 | 부모 + `p_pin` |
 | `study_add_note` | 💬 한마디 남기기 | 가족이면 누구나(부모·아이) |
 | `study_delete_note` | 💬 한마디 지우기 | 내 글은 누구나 / 남의 글은 부모 + `p_pin` |
 
@@ -215,6 +216,7 @@ scripts/verify-sync.py    동기화 전/후 화면 자동 검증
 scripts/verify-live-sync.py  라이브 사이트에서 두 사람 시점 실시간 검증(테스트 항목 자동 정리)
 scripts/verify-child-parent-defaults.py  프로필 아빠·엄마 PIN 전환 · 기본 목록 1탭 채우기 검증(데모 빌드)
 scripts/verify-family-board.py  프로필 PIN 전환 · 부모 할 일 보드 · 💬 한마디 검증(데모 빌드)
+scripts/verify-note-alert.py  💬 새 한마디 알림 경로 검증 — 서비스 워커 알림·진동·배너 닫기(데모 빌드)
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백)
 public/icons/             앱 아이콘(192/512/maskable/apple)
@@ -297,6 +299,10 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
   - 공휴일: 12/25 성탄절 빨간 점·주간 목록·날짜 제목 배지
   - 실시간: 부모가 추가한 숙제가 아이 화면에 새로고침 없이 등장
   - 검증용 숙제는 모두 삭제, 숙제 수 39개 원복
+- `python3 scripts/verify-note-alert.py` — 390×844 헤드리스 Chrome(데모 빌드) 19개 검사 전부 통과
+  - 앱을 보고 있어도(`visibilityState=visible`) 알림이 나감 · 안드로이드 크롬용 `ServiceWorkerRegistration.showNotification`
+    경로(태그 · `renotify` · 진동 `[150,80,150]`) · `new Notification` 은 서비스 워커가 없을 때만(2.5초 기다린 뒤)
+  - 알림판을 눌러도 배너는 그대로 · 닫기 버튼으로만 사라짐 · 닫은 뒤 다시 열어도 울리지 않음 · JS 오류 0
 - 라이브 DB 적용 SQL(비공개)을 예전 스키마 위에서 그대로 실행하는 마이그레이션 검사 — 21개 통과
   (PIN 해시 저장 · 아이 이름 변경 · 옛 확인 대기 → 완료 이전 · 두 번 실행 안전)
 

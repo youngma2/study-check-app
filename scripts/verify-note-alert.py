@@ -187,6 +187,50 @@ def main() -> int:
 
             check('자바스크립트 오류 없음', not errors, ' / '.join(errors)[:200])
 
+            # 5) 서비스 워커가 준비되지 않는 상황(예: 첫 설치 직후)에는 2.5초 뒤 new Notification 으로 넘어갑니다.
+            ctx2 = browser.new_context(
+                viewport={'width': 390, 'height': 844},
+                locale='ko-KR',
+                timezone_id='Asia/Seoul',
+                permissions=['notifications'],
+            )
+            ctx2.add_init_script(
+                INSTRUMENT
+                + """
+                try {
+                  Object.defineProperty(navigator.serviceWorker, 'ready', {
+                    get: () => new Promise(() => {}),
+                    configurable: true,
+                  });
+                } catch (error) {}
+                """
+            )
+            page2 = ctx2.new_page()
+            errors2: list[str] = []
+            page2.on('pageerror', lambda error: errors2.append(str(error)))
+            page2.goto(BASE + '#as=mem_child1')
+            page2.wait_for_selector('[data-testid="open-profile"]', timeout=15000)
+            page2.evaluate(
+                """({ notesKey }) => {
+                    localStorage.setItem(notesKey, JSON.stringify([{
+                      id: 'n_mom_alert_fallback',
+                      family_id: 'fam_demo',
+                      author_id: 'mem_mom',
+                      content: '저녁 7시에 데리러 가요',
+                      created_at: new Date().toISOString(),
+                    }]));
+                }""",
+                {'notesKey': NOTES_KEY},
+            )
+            page2.reload()
+            page2.wait_for_selector('[data-testid="family-note-alert"]', timeout=10000)
+            page2.wait_for_timeout(4200)
+            rec_fb = page2.evaluate('window.__notifyRec')
+            check('워커가 없으면 new Notification 으로 넘어간다', len(rec_fb.get('ctor', [])) == 1, str(len(rec_fb.get('ctor', []))))
+            check('넘어간 알림 본문', '엄마' in str((rec_fb.get('ctor') or [{}])[0].get('options', {}).get('body', '')), str((rec_fb.get('ctor') or [{}])[0].get('options', {}).get('body', '')))
+            check('워커가 없을 때는 showNotification 을 부르지 않는다', len(rec_fb.get('sw', [])) == 0, str(len(rec_fb.get('sw', []))))
+            check('자바스크립트 오류 없음 (워커 없음)', not errors2, ' / '.join(errors2)[:200])
+
             browser.close()
     finally:
         server.kill()
