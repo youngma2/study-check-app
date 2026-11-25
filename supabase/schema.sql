@@ -765,11 +765,18 @@ revoke insert, update, delete on public.push_config from anon, authenticated;
 revoke all on public.push_subscriptions from anon, authenticated;
 revoke all on public.push_subscriptions from public;
 
--- 알림 함수(service_role)는 두 표를 읽고 씁니다. (프로젝트 기본 권한이 있어도 한 번 더 명시)
+-- 알림 함수(service_role)는 아래 표들을 읽고 씁니다. (프로젝트 기본 권한이 있어도 한 번 더 명시)
+--   · push_config / push_subscriptions : VAPID 키·구독 읽기/쓰기
+--   · family_notes                    : 새 글 읽기 + push_sent_at 표시(UPDATE)
+--   · family_members / families / tasks : 글쓴이 이름·가족 정보 읽기
+--   (2026-11-25: service_role 에 SELECT/UPDATE 가 없어 함수가 403 42501 로 실패했습니다.
+--    한마디 저장은 되지만 알림만 안 가는 상태였으니 이 GRANT 를 빼지 마세요.)
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     execute 'grant all on public.push_config, public.push_subscriptions to service_role';
+    execute 'grant select on public.families, public.family_members, public.tasks, public.family_notes to service_role';
+    execute 'grant update on public.family_notes to service_role';
   end if;
 end;
 $$;
