@@ -943,7 +943,7 @@ end;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 5. 우리 가족 공부방 + 이번 주 샘플 (여러 번 실행해도 중복·덮어쓰기 없음)
+-- 5. 우리 가족 공부방 · 구성원 (여러 번 실행해도 중복·덮어쓰기 없음)
 -- ----------------------------------------------------------------------------
 
 insert into public.families (id, name)
@@ -972,41 +972,8 @@ values
    ]'::jsonb)
 on conflict (id) do nothing;
 
--- 이번 주(월~일) 샘플 숙제. 날짜는 한국 시간 기준 이번 주 월요일부터 채웁니다.
-with plan (member_id, idx, title, subject, days) as (
-  values
-    ('mem_child1', 0, '스픽 30분',          'english', array[0, 1, 2, 3, 4, 5]),
-    ('mem_child1', 1, '영어 단어 5개 외우기',   'english', array[0, 1, 2, 3, 4]),
-    ('mem_child1', 2, '타자 연습 20분',      'etc',     array[0, 1, 2, 3, 4]),
-    ('mem_child1', 3, '책 읽기 30분',        'reading', array[0, 1, 2, 3, 4, 5]),
-    ('mem_child1', 4, '문제집과 오답 노트',   'math',    array[1, 3]),
-    ('mem_child1', 5, '독서록 (아빠 검사)',   'reading', array[5]),
-    ('mem_child2', 0, '온리원',             'etc',     array[0, 1, 2, 3, 4]),
-    ('mem_child2', 1, '스픽 30분',          'english', array[0, 1, 2, 3, 4, 5]),
-    ('mem_child2', 2, '문제집과 오답 노트',   'math',    array[0, 1, 2, 3, 4]),
-    ('mem_child2', 3, '신문 요약',          'korean',  array[0, 2, 4]),
-    ('mem_child2', 4, '책 읽기 30분',        'reading', array[0, 1, 2, 3, 4, 5, 6]),
-    ('mem_child2', 5, '타자 연습 20분',      'etc',     array[0, 1, 2, 3, 4])
-),
-days as (
-  select (date_trunc('week', (now() at time zone 'Asia/Seoul'))::date + g) as day
-  from generate_series(0, 6) as g
-)
-insert into public.tasks (id, family_id, member_id, title, subject, due_date, status, created_by, created_at, updated_at)
-select
-  't_' || p.member_id || '_' || to_char(d.day, 'YYYY-MM-DD') || '_' || p.idx,
-  'fam_our_home',
-  p.member_id,
-  p.title,
-  p.subject,
-  d.day::date,
-  'todo',
-  p.member_id,
-  (d.day::date + time '08:10') at time zone 'Asia/Seoul' + (p.idx * interval '1 minute'),
-  (d.day::date + time '08:10') at time zone 'Asia/Seoul' + (p.idx * interval '1 minute')
-from plan p
-join days d on (extract(isodow from d.day)::int - 1) = any (p.days)
-on conflict (id) do nothing;
+-- (샘플 숙제 블록은 없앴습니다 — 예전 임시 데모 항목이 다시 들어가지 않도록.
+--  새 가족의 공부 항목은 앱의 '+ 추가' 나 '기본 목록'으로 넣습니다.)
 
 -- ----------------------------------------------------------------------------
 -- 6. 부모 관리 PIN 정하기 (한 번만)
