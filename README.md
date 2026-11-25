@@ -304,7 +304,9 @@ src/
     ProfileSheet.tsx      역할 전환 시트 (아빠·엄마 + PIN 배지 · 관리 잠금 · 이름 바꾸기)
     FamilyNotesBoard.tsx  💬 우리 가족 한마디 (날짜별 알림판 · 실시간 · 안 읽은 글 배너)
     TierBadge.tsx         🏆 티어 엠블럼 SVG (방패·보석·왕관) + 이름 옆 배지
-    TierPanel.tsx         🏆 시즌 스트립·상단 시즌 바·🎁 뽑기 상자(열기 연출·사용 완료)
+    TierPanel.tsx         🏆 시즌 스트립·상단 시즌 바·🎁 뽑기 상자(3택1 팝업 열기·사용 완료)
+    RewardGiftModal.tsx   🎁 3택1 뽑기 팝업 (상자 3개·진동·Web Audio 효과음·폭죽/반짝이 연출)
+    ParentDashboard.tsx   📊 이번 주 요약 카드 + 주별/월별 상세 대시보드 (부모 전용)
     Sheet.tsx             바텀시트 공통
     icons.tsx             인라인 SVG 아이콘
   lib/
@@ -318,6 +320,8 @@ src/
     defaults.ts           '기본 목록' — 같은 요일 패턴의 지난 기록으로 그 날 채우기
     notes.ts              💬 한마디 날짜(noteDate)·기기 저장·안 읽은 시각·시간 표기
     chime.ts              새 한마디 알림음 (아주 작은 두 음)
+    reward-sound.ts       🎁 상자 효과음 (Web Audio — 틱틱·두근두근·팡파레, 음소거 기억)
+    report.ts             📊 기간(주·월) 집계 — 진행도·연속 100%·보너스 시간 합산·취합용 텍스트
     push.ts               🔔 백그라운드 알림 등록(권한·구독·서버 등록·자동 회복)
     deeplink.ts           알림을 눌러 열 때의 날짜 링크(#date=2026-11-25&note=…) 해석
     study-context.tsx     React 상태/액션 훅 (낙관적 반영 + 실시간 병합 + 복사)
@@ -336,6 +340,9 @@ scripts/verify-family-board.py  프로필 PIN 전환 · 부모 할 일 보드 ·
 scripts/verify-day-split.py  날짜 요약 완료율이 아이별로 나뉘는지 검증 — 카드 수·이름·개수·퍼센트·막대·나란히(데모 빌드)
 scripts/verify-note-alert.py  💬 새 한마디 알림 경로 검증 — 서비스 워커 알림·진동·배너 닫기(데모 빌드)
 scripts/verify-live-note-dates.py  라이브 사이트에서 💬 한마디가 날짜마다 따로 보이는지 · 배너 닫기 검증
+scripts/verify-tier-ui.py  🏆 티어·🔥 연속 100%·🎁 3택1 뽑기 팝업(진동·효과음·나머지 상자 공개·기기 저장) 검증(데모 빌드)
+scripts/verify-dashboard.py  📊 부모 요약 카드 → 상세 대시보드(주별/월별·기간 이동·보너스 합산·취합용 복사·아이 화면 미노출) 검증(데모 빌드)
+scripts/verify-live-reward-dashboard.py  라이브 사이트에서 부모 대시보드 · (응답 스텁) 3택1 팝업 · DB 무변경 확인
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백·🔔 push 알림·알림 클릭 딥링크)
 public/icons/             앱 아이콘(192/512/maskable/apple)
@@ -355,6 +362,27 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **🎁 3택1 뽑기 상자 팝업 · 📊 부모 대시보드** (2026-11-25)
+  - `python3 scripts/verify-tier-ui.py` — 390×844 헤드리스 Chrome(데모 빌드) **40개 검사 통과**
+    - 카드의 `🎁 눌러서 열기` → 화면 가운데 개별 팝업 · 상자 3개 · 고르기 전 숫자 숨김
+    - 고르면 흔들리며 여는 중 → 당첨 시간이 크게(`+15분 게임 시간`) · 나머지 두 상자 값 공개(`다른 상자엔 +5분, +20분이 있었어요!`)
+    - 진동 순서 `15` → `[20,40,20,40,50]` → `[40,30,80]` · 효과음 Oscillator 24개(외부 mp3 없음) · 음소거 버튼
+    - 뽑은 값이 카드·`localStorage(study-check.reward-opens.v1)` 에 남고, 새로고침해도 그대로(중복 없음)
+    - 부모 팝업에서는 당첨 뒤 바로 `사용 완료` → 카드 배지도 `사용 완료`
+  - `python3 scripts/verify-dashboard.py` — 같은 데모 빌드 **34개 검사 통과**
+    - 부모 화면 위쪽 `이번 주 요약` 카드: 아이별 완료율·🔥연속·🎁남은 시간 / 아이 화면에는 카드도 대시보드도 없음
+    - 카드를 누르면 상세 대시보드: 주별(이번 주 89%·75%) · 연속 2일차·1일차 · 보너스 `받음 30분 · 사용 20분 · 남음 10분` + 전체 미사용
+    - 주별 일별 막대 7칸 · 월별 캘린더(30칸)+주차별 요약표 · 이전 주/다음 주·이전 달/다음 달·이번 주 돌아오기
+    - `📋 취합용 복사`: 주간/월간 텍스트(진행도·연속·보너스 내역·일별 달성률·합계)가 클립보드로
+  - **라이브 검증** (실제 사이트 + 실제 Supabase DB, 390×844) `python3 scripts/verify-live-reward-dashboard.py` **31개 검사 통과**
+    - 부모 PIN(2510) → 이번 주 요약 카드(실제 DB 기준 예원·찬율) → 상세 대시보드(2026.11.23–11.29, 아이 카드 2장, 0%) · 월별 2026년 11월 · 지난달 이동 · 취합용 복사
+    - 아이 화면(`#as=mem_child2`)에는 요약 카드·대시보드·복사 버튼 없음 · JS 오류 0
+    - 3택1 팝업은 라이브 DB 에 상자가 없어 **응답만 가짜 1건으로 바꿔**(서비스 워커 끈 창) 확인: 팝업·상자 3개·`+15분`·나머지 공개·진동 3단·효과음 26개·RPC `study_open_reward(p_event_id=ev_verify_…)` 호출·기기 저장
+    - 확인 전/후 `family_tier_events` 가 **빈 상태 그대로**(DB 에 아무것도 쓰지 않음)
+  - 화면: `downloads/study_gift_choose.png` · `study_gift_result.png` · `study_gift_parent.png` · `study_dashboard_summary.png` · `study_dashboard_week.png` · `study_dashboard_month.png` · `study_dashboard_child_hidden.png` · `study_live_summary.png` · `study_live_dashboard_week.png` · `study_live_dashboard_month.png` · `study_live_gift_choose.png` · `study_live_gift_result.png` · `study_live_child.png`
+  - 캐시: 서비스 워커 셸 `study-check-shell-v5` · `tsc --noEmit` 0 · `npm run build` 성공
+  - 참고: `verify-family-board.py` 는 이번 라이브 정리 커밋(`6b169f9`) 상태에서도 2개(통화 항목 아이 날짜 요약·보드 카드 수)가 실패합니다(변경 전 커밋에서도 동일 — 이 작업과 무관한 기존 실패).
 
 - **🔔 백그라운드 알림(Web Push) 구조 · 코드 · 검사** (2026-11-25)
   - 암호화: `npm run test:push` (17개 통과) — '폰'이 만든 구독 키로 암호문을 실제로 복호화해 원문 일치 확인

@@ -224,8 +224,13 @@ def main() -> int:
                 body=json.dumps(opened_event, ensure_ascii=False),
             )
 
-        cpage.route('**/rest/v1/family_tier_events*', handle_events)
-        cpage.route('**/rest/v1/rpc/study_open_reward', handle_open)
+        # 서비스 워커를 끈 새 창에서만 응답을 바꿔 끼웁니다(워커가 대신 받아 가면 가로챌 수 없어요).
+        stub = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, service_workers='block')
+        stub.add_init_script(SPY)
+        cpage = stub.new_page()
+        stub.on('pageerror', lambda exc: child_errors.append(str(exc)))
+        stub.route('**/rest/v1/family_tier_events*', handle_events)
+        stub.route('**/rest/v1/rpc/study_open_reward', handle_open)
         cpage.goto(f'{URL}#as=mem_child2', wait_until='networkidle')
         cpage.wait_for_selector('[data-testid="tier-panel-mem_child2"]', timeout=30000)
         cpage.wait_for_selector('[data-testid^="reward-open-"]', timeout=15000)
@@ -261,6 +266,7 @@ def main() -> int:
         check('라이브: 닫으면 카드에 +15분', '+15분' in cpage.locator('[data-testid^="reward-box-"]').first.inner_text(),
               cpage.locator('[data-testid^="reward-box-"]').first.inner_text().replace('\n', ' / '))
         child.close()
+        stub.close()
 
         browser.close()
 

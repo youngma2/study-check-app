@@ -139,7 +139,13 @@ function DayBars({ report, compact }: { report: MemberReport; compact?: boolean 
             data-testid={`dash-day-${report.memberId}-${day.date}`}
             className={cx(
               'w-full rounded-t-md transition-all',
-              day.total === 0 ? 'bg-slate-100' : day.allClear ? 'bg-emerald-400' : 'bg-indigo-300',
+              day.total === 0
+                ? 'bg-slate-100'
+                : day.allClear
+                  ? 'bg-emerald-400'
+                  : day.rate > 0
+                    ? 'bg-indigo-300'
+                    : 'bg-slate-300',
             )}
             style={{ height: `${day.total === 0 ? 4 : Math.max(Math.round(day.rate * 100), 8)}%` }}
           />
