@@ -127,18 +127,20 @@ export function DemoGiftPage() {
   );
 
   return (
-    <div data-testid="demo-page" className="min-h-screen bg-gradient-to-b from-violet-50 via-white to-amber-50/50 px-4 pb-10 pt-3">
-      <div className="mx-auto w-full max-w-[420px]">
-        {/* 🧪 체험 모드 배너 */}
+    <div data-testid="demo-page" className="min-h-screen bg-gradient-to-b from-violet-50 via-white to-amber-50/50 px-4 pb-10 pt-[66px]">
+      {/* 🧪 체험 모드 배너 — 팝업이 열려 있어도 가려지지 않게 맨 위에 고정합니다. */}
+      <div className="fixed inset-x-0 top-0 z-[65] px-4 pt-2">
         <div
           data-testid="demo-banner"
           role="status"
-          className="rounded-2xl bg-amber-400 px-3 py-2 text-center text-[11.5px] font-extrabold leading-snug text-amber-950 shadow-sm ring-1 ring-amber-500/30"
+          className="mx-auto max-w-[420px] rounded-2xl bg-amber-400 px-3 py-2 text-center text-[11.5px] font-extrabold leading-snug text-amber-950 shadow-sm ring-1 ring-amber-500/30"
         >
           🧪 체험용 데모 모드 · 실제 가족 기록에는 저장되지 않습니다
         </div>
+      </div>
 
-        <header className="mt-3 rounded-[26px] bg-white p-4 shadow-card ring-1 ring-slate-900/5">
+      <div className="mx-auto w-full max-w-[420px]">
+        <header className="rounded-[26px] bg-white p-4 shadow-card ring-1 ring-slate-900/5">
           <p className="text-[10px] font-extrabold tracking-wide text-violet-400">🎁 3택1 뽑기 상자</p>
           <h1 className="mt-1 text-[19px] font-extrabold leading-tight tracking-tight text-slate-900">
             상자 3개 중 하나를 골라 봐!

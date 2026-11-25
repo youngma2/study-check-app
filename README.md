@@ -381,6 +381,20 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 
 ## 8. 검증 기록
 
+- **🧪 뽑기 상자 체험 페이지(demo.html) — 실제 팝업 그대로 · Supabase·기기 저장 없음** (2026-11-25)
+  - **라이브**: **https://youngma2.github.io/study-check-app/demo.html** (HTTP 200 · 같은 `gh-pages` 배포의 두 번째 페이지)
+  - `python3 scripts/verify-demo-gift.py --live` — 실제 사이트 + 실제 Supabase DB, 390×844 헤드리스 Chrome **30개 검사 통과**
+    - 접속하자마자 3택1 팝업 자동 열림 · 상자 3개 · 고르기 전 숫자 숨김 → `+15분` 당첨 · 나머지 두 상자 `+10분, +5분` 공개
+    - 진동 `15 → [20,40,20,40,50] → [40,30,80] → 10` · 효과음 Oscillator 26개 · 🔊/🔇 토글 · `사용 완료`(화면에만)
+    - 닫으면 버튼이 `🎁 다시 뽑아보기` 로 바뀌고 기록 1건 → 다시 뽑으면 고르기부터(`+10분`) → 기록 2건
+    - Supabase 요청 0건 · RPC 0건 · 실제 앱 키(`study-check.db`·`tier-events`·`reward-opens`) 없음(`study-check.demo.reward-sound.v1` 만)
+    - DB: `tasks` **497 → 497** · `family_tier_events` **0 → 0** (아무것도 쓰지 않음) · JS·콘솔 오류 0
+    - 화면: `/workspace/downloads/study_demo_live_choose.png` · `study_demo_live_result.png` · `study_demo_live_closed.png` · `study_demo_live_second.png`
+  - `python3 scripts/verify-demo-gift.py` — 로컬 `dist` 빌드 **28개 검사 통과**(같은 항목 · 스크린샷 `study_demo_local_*.png`)
+  - 구조: `demo.html`(Vite 멀티페이지 엔트리) + `src/demo-main.tsx` + `src/components/DemoGiftPage.tsx` + `src/lib/demo-context.tsx`
+    — 실제 `RewardGiftModal` 을 한 줄도 고치지 않고 그대로 쓰고, RPC(`study_open_reward` 등)·DB·localStorage 는 체험용 컨텍스트가 아예 부르지 않습니다.
+  - `tsc --noEmit` 0 · `npm run build` 성공 (다른 화면·검증은 그대로)
+
 - **🎁 3택1 뽑기 상자 팝업 · 📊 부모 대시보드** (2026-11-25)
   - `python3 scripts/verify-tier-ui.py` — 390×844 헤드리스 Chrome(데모 빌드) **40개 검사 통과**
     - 카드의 `🎁 눌러서 열기` → 화면 가운데 개별 팝업 · 상자 3개 · 고르기 전 숫자 숨김
