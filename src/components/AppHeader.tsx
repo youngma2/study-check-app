@@ -2,6 +2,9 @@ import { cx } from '../lib/cx';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
 import { ChevronDownIcon } from './icons';
+import { TierEmblem } from './TierBadge';
+import { SeasonBar } from './TierPanel';
+import { useStudy } from '../lib/study-context';
 
 interface AppHeaderProps {
   familyName: string;
@@ -19,6 +22,8 @@ export function AppHeader({
   onOpenProfile,
 }: AppHeaderProps) {
   const theme = memberTheme(currentMember.color);
+  const study = useStudy();
+  const tier = currentMember.role === 'child' ? study.seasonStatsFor(currentMember.id)?.level : null;
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-900/5 bg-[#f5f6fa]/85 backdrop-blur-xl">
@@ -48,8 +53,13 @@ export function AppHeader({
           onClick={onOpenProfile}
           className="flex shrink-0 items-center gap-1 rounded-full bg-white py-1 pl-1 pr-2 ring-1 ring-slate-900/10 shadow-sm transition active:scale-95"
         >
-          <span className={cx('grid h-7 w-7 place-items-center rounded-full text-[14px]', theme.avatar)} aria-hidden>
+          <span className={cx('relative grid h-7 w-7 place-items-center rounded-full text-[14px]', theme.avatar)} aria-hidden>
             {currentMember.emoji}
+            {tier ? (
+              <span className="absolute -bottom-1 -right-1 rounded-full bg-white p-[1px] shadow-sm ring-1 ring-slate-900/5">
+                <TierEmblem tier={tier.key} division={tier.division} size="xs" />
+              </span>
+            ) : null}
           </span>
           <span className="flex flex-col items-start leading-tight">
             <span className="text-[11px] font-extrabold text-slate-800">{currentMember.name}</span>
@@ -58,6 +68,7 @@ export function AppHeader({
           <ChevronDownIcon className="h-3 w-3 text-slate-400" />
         </button>
       </div>
+      {currentMember.role === 'child' ? <SeasonBar memberId={currentMember.id} /> : null}
     </header>
   );
 }

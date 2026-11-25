@@ -45,6 +45,28 @@ import {
 import { LocalStorageAdapter, type RemoteEvent, type RealtimeState, type StorageChange, type StorageKind } from './storage';
 import { enablePushNotifications, syncPushRegistration } from './push';
 import { StorageSetupError, createSupabaseAdapter, type NotesRemoteEvent } from './supabase';
+import { koreaTodayISO } from './date';
+import {
+  computePastSeason,
+  computeSeasonStats,
+  previousSeason,
+  seasonOf,
+  type SeasonStats,
+  type TierLevel,
+} from './season';
+import {
+  DEFAULT_REWARD_SETTINGS,
+  buildLocalTierEvent,
+  loadLocalRewardSettings,
+  loadLocalTierEvents,
+  normalizeSettings,
+  saveLocalRewardSettings,
+  saveLocalTierEvents,
+  sortTierEvents,
+  tierEventId,
+  type RewardSettings,
+  type TierEvent,
+} from './rewards';
 import type { FamilyNote, Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
 
 export interface ActionResult {
@@ -89,6 +111,19 @@ export interface StudyContextValue {
   deleteNote: (noteId: string) => Promise<ActionResult>;
   /** 🔔 백그라운드 알림 켜기 — 알림 권한 요청 + 이 기기를 가족 알림에 등록 */
   enablePush: () => Promise<ActionResult>;
+  /** 🏆 이번 달 시즌 기록(티어·XP·연속 100%) — 아이만 있습니다. */
+  seasonStatsFor: (memberId: string) => SeasonStats | undefined;
+  /** 지난달 최고 티어 — 기록이 없으면 null */
+  lastSeasonFor: (memberId: string) => { season: string; xp: number; level: TierLevel } | null;
+  /** 승급 기록 — 큰 티어 승급 줄에 뽑기 상자(box_minutes)가 붙어 있습니다. */
+  tierEvents: TierEvent[];
+  tierEventsFor: (memberId: string) => TierEvent[];
+  tierEventsState: 'loading' | 'ready' | 'unavailable';
+  /** 🎁 보상 설정(뽑기 풀·알림) */
+  rewardSettings: RewardSettings;
+  openReward: (eventId: string) => Promise<ActionResult>;
+  useReward: (eventId: string) => Promise<ActionResult>;
+  saveRewardSettings: (patch: Partial<RewardSettings>) => Promise<ActionResult>;
   tasksFor: (memberId: string, dateIso: string) => Task[];
   summaryFor: (memberId: string, dateIso: string) => TaskSummary;
   addTask: (input: NewTaskInput) => Promise<ActionResult>;
@@ -409,6 +444,317 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     if (!actor) return;
     void syncPushRegistration(cloud, actor.id);
   }, [cloud, mode, syncState, currentMemberId]);
+
+  /* ---------------------------------------------------------------- */
+  /* 🏆 월간 시즌 티어 · 🎁 보상 쭕기 상자                                */
+  /* ---------------------------------------------------------------- */
+
+  const [tierEvents, setTierEvents] = useState<TierEvent[]>(() => (cloud ? [] : loadLocalTierEvents()));
+  const tierEventsRef = useRef<TierEvent[]>(tierEvents);
+  tierEventsRef.current = tierEvents;
+  const [tierEventsState, setTierEventsState] = useState<'loading' | 'ready' | 'unavailable'>(
+    cloud ? 'loading' : 'ready',
+  );
+
+  const [rewardSettings, setRewardSettingsState] = useState<RewardSettings>(() =>
+    cloud ? { ...DEFAULT_REWARD_SETTINGS } : loadLocalRewardSettings(),
+  );
+  const rewardSettingsRef = useRef<RewardSettings>(rewardSettings);
+  rewardSettingsRef.current = rewardSettings;
+
+  const applyTierEvents = useCallback(
+    (next: TierEvent[]) => {
+      tierEventsRef.current = next;
+      setTierEvents(next);
+      if (!cloud) saveLocalTierEvents(next);
+    },
+    [cloud],
+  );
+
+  // 승급 기록을 불러옵니다(표가 아직 없으면 'unavailable' — 티어 표시는 그대로 동작합니다).
+  useEffect(() => {
+    if (!cloud) {
+      setTierEventsState('ready');
+      return;
+    }
+    if (syncState === 'setup') {
+      setTierEventsState('unavailable');
+      return;
+    }
+    if (mode !== 'supabase' || syncState !== 'synced') return;
+
+    let alive = true;
+    cloud
+      .loadTierEvents()
+      .then((remote) => {
+        if (!alive) return;
+        if (remote === null) {
+          setTierEventsState('unavailable');
+          return;
+        }
+        const sorted = sortTierEvents(remote);
+        tierEventsRef.current = sorted;
+        setTierEvents(sorted);
+        setTierEventsState('ready');
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        console.warn('[study-check] 티어 기록 불러오기 실패', error);
+        setTierEventsState('unavailable');
+      });
+
+    const familyId = dbRef.current.families[0]?.id;
+    if (familyId) {
+      cloud
+        .loadRewardSettings(familyId)
+        .then((settings) => {
+          if (!alive || !settings) return;
+          rewardSettingsRef.current = settings;
+          setRewardSettingsState(settings);
+        })
+        .catch(() => {
+          /* 설정은 기본값으로 계속 씁니다. */
+        });
+    }
+
+    return () => {
+      alive = false;
+    };
+  }, [cloud, mode, syncState]);
+
+  // 다른 폰에서 상자를 열거나 사용 완료하면 바로 반영합니다.
+  useEffect(() => {
+    if (!cloud || mode !== 'supabase' || syncState !== 'synced' || tierEventsState !== 'ready') return;
+    const familyId = dbRef.current.families[0]?.id;
+    if (!familyId) return;
+    return cloud.subscribeTierEvents(familyId, (event) => {
+      const prev = tierEventsRef.current;
+      const next =
+        event.kind === 'delete'
+          ? prev.filter((item) => item.id !== event.eventId)
+          : prev.some((item) => item.id === event.event.id)
+            ? prev.map((item) => (item.id === event.event.id ? event.event : item))
+            : sortTierEvents([...prev, event.event]);
+      tierEventsRef.current = next;
+      setTierEvents(next);
+    });
+  }, [cloud, mode, syncState, tierEventsState]);
+
+  /** 이번 달(오늘까지) 아이별 시즌 기록 — 공부 목록이 바뀌면 같이 다시 셈합니다. */
+  const seasonStats = useMemo(() => {
+    const map: Record<string, SeasonStats> = {};
+    const today = koreaTodayISO();
+    for (const member of db.members) {
+      if (member.role !== 'child') continue;
+      map[member.id] = computeSeasonStats(db.tasks, member.id, today);
+    }
+    return map;
+  }, [db]);
+
+  /** 지난달 최고 기록 — 배지로만 보여 줍니다. */
+  const lastSeasonStats = useMemo(() => {
+    const map: Record<string, { season: string; xp: number; level: TierLevel }> = {};
+    const season = previousSeason(seasonOf(koreaTodayISO()));
+    for (const member of db.members) {
+      if (member.role !== 'child') continue;
+      const past = computePastSeason(db.tasks, member.id, season);
+      if (past.xp > 0) map[member.id] = { season, xp: past.xp, level: past.level };
+    }
+    return map;
+  }, [db]);
+
+  /** 진행 중인 승급 기록을 중복으로 보내지 않기 위한 잠금 */
+  const promotingRef = useRef<Set<string>>(new Set());
+
+  /**
+   * 승급 한 칸을 기록합니다.
+   * · 큰 티어(실버·골드…)면 서버가 뽑기 상자와 축하 한마디(=폰 푸시)를 함께 만듭니다.
+   * · 같은 칸은 id 가 같아서, 폰이 여러 대여도 알림은 한 번만 갑니다.
+   */
+  const promoteTier = useCallback(
+    async (member: Member, season: string, level: number, notify: boolean) => {
+      const key = `${member.id}:${season}:${level}`;
+      if (promotingRef.current.has(key)) return;
+      promotingRef.current.add(key);
+
+      const settings = rewardSettingsRef.current;
+      const rank = Math.min(6, Math.floor(level / 3) + 1);
+      const shouldNotify = notify && (rank >= 2 ? settings.notify_box : settings.notify_step);
+      const useCloud = cloud !== null && modeRef.current === 'supabase';
+
+      try {
+        if (!useCloud) {
+          const id = tierEventId(member.id, season, level);
+          if (tierEventsRef.current.some((event) => event.id === id)) return;
+          const event = buildLocalTierEvent({
+            familyId: member.family_id,
+            memberId: member.id,
+            season,
+            level,
+            settings,
+          });
+          applyTierEvents(sortTierEvents([...tierEventsRef.current, event]));
+          return;
+        }
+
+        const current = dbRef.current;
+        const actor =
+          current.members.find((item) => item.id === currentMemberIdRef.current) ?? current.members[0];
+        if (!actor) return;
+
+        const result = await cloud.tierPromotion(actor.id, member.id, season, level, shouldNotify);
+        const saved = result.event;
+        if (saved) {
+          const others = tierEventsRef.current.filter((event) => event.id !== saved.id);
+          const next = sortTierEvents([...others, saved]);
+          tierEventsRef.current = next;
+          setTierEvents(next);
+        }
+      } catch (error) {
+        console.warn('[study-check] 티어 승급 기록 실패', error);
+      } finally {
+        promotingRef.current.delete(key);
+      }
+    },
+    [applyTierEvents, cloud],
+  );
+
+  // 티어가 올랐는데 기록이 없으면 한 칸씩 남깁니다(놓친 칸은 알림 없이 채우고, 마지막 칸만 알립니다).
+  useEffect(() => {
+    if (tierEventsState !== 'ready') return;
+    if (cloud && syncState !== 'synced') return;
+
+    for (const member of db.members) {
+      if (member.role !== 'child') continue;
+      const stats = seasonStats[member.id];
+      if (!stats) continue;
+      // 0 = 브론즈 III(모두의 시작 칸)라서 승급으로 치지 않습니다.
+      const known = tierEventsRef.current.reduce(
+        (max, event) =>
+          event.member_id === member.id && event.season === stats.season ? Math.max(max, event.level) : max,
+        0,
+      );
+      if (stats.level.index <= known) continue;
+      for (let level = known + 1; level <= stats.level.index; level += 1) {
+        void promoteTier(member, stats.season, level, level === stats.level.index);
+      }
+    }
+  }, [db, seasonStats, tierEvents, tierEventsState, syncState, cloud, promoteTier]);
+
+  /** 🎁 상자 열기 — 뽑힌 보상은 이미 정해져 있어서 어느 폰에서 열어도 같은 값입니다. */
+  const openReward = useCallback(
+    async (eventId: string): Promise<ActionResult> => {
+      const before = tierEventsRef.current;
+      const target = before.find((event) => event.id === eventId);
+      if (!target) return { ok: false, error: '상자를 찾지 못했어요.' };
+      if (target.opened_at) return { ok: true };
+
+      const current = dbRef.current;
+      const actor =
+        current.members.find((item) => item.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+
+      applyTierEvents(
+        before.map((event) =>
+          event.id === eventId ? { ...event, opened_at: new Date().toISOString() } : event,
+        ),
+      );
+
+      if (modeRef.current !== 'supabase' || !cloud) return { ok: true };
+
+      try {
+        const saved = await cloud.openReward(actor.id, eventId);
+        const next = tierEventsRef.current.map((event) => (event.id === eventId ? saved : event));
+        tierEventsRef.current = next;
+        setTierEvents(next);
+        return { ok: true };
+      } catch (error) {
+        applyTierEvents(before);
+        return { ok: false, error: messageOf(error) };
+      }
+    },
+    [applyTierEvents, cloud],
+  );
+
+  /** ✅ 보상 사용 완료 — 부모(PIN 인증) 만. */
+  const useReward = useCallback(
+    async (eventId: string): Promise<ActionResult> => {
+      const before = tierEventsRef.current;
+      const target = before.find((event) => event.id === eventId);
+      if (!target) return { ok: false, error: '보상을 찾지 못했어요.' };
+
+      const current = dbRef.current;
+      const actor =
+        current.members.find((item) => item.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+      if (actor.role !== 'parent') return { ok: false, error: '보상 사용 처리는 부모님만 할 수 있어요.' };
+
+      const pin = sessionPinRef.current;
+      if (modeRef.current === 'supabase' && !pin) {
+        return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
+      }
+
+      applyTierEvents(
+        before.map((event) =>
+          event.id === eventId
+            ? { ...event, used_at: new Date().toISOString(), used_by: actor.id }
+            : event,
+        ),
+      );
+
+      if (modeRef.current !== 'supabase' || !cloud) return { ok: true };
+
+      try {
+        const saved = await cloud.useReward(actor.id, eventId, pin);
+        const next = tierEventsRef.current.map((event) => (event.id === eventId ? saved : event));
+        tierEventsRef.current = next;
+        setTierEvents(next);
+        return { ok: true };
+      } catch (error) {
+        applyTierEvents(before);
+        return { ok: false, error: messageOf(error) };
+      }
+    },
+    [applyTierEvents, cloud],
+  );
+
+  /** ⚙️ 보상 설정(뽑기 풀·알림) — 부모(PIN 인증) 만. */
+  const saveRewardSettings = useCallback(
+    async (patch: Partial<RewardSettings>): Promise<ActionResult> => {
+      const next = normalizeSettings({ ...rewardSettingsRef.current, ...patch });
+      const current = dbRef.current;
+      const actor =
+        current.members.find((item) => item.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+
+      if (modeRef.current === 'supabase' && cloud) {
+        if (actor.role !== 'parent') return { ok: false, error: '보상 설정은 부모님만 바꿀 수 있어요.' };
+        const pin = sessionPinRef.current;
+        if (!pin) return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
+        try {
+          const saved = await cloud.saveRewardSettings(actor.id, next, pin);
+          rewardSettingsRef.current = saved;
+          setRewardSettingsState(saved);
+          return { ok: true };
+        } catch (error) {
+          return { ok: false, error: messageOf(error) };
+        }
+      }
+
+      rewardSettingsRef.current = next;
+      setRewardSettingsState(next);
+      saveLocalRewardSettings(next);
+      return { ok: true };
+    },
+    [cloud],
+  );
+
+  const seasonStatsFor = useCallback((memberId: string) => seasonStats[memberId], [seasonStats]);
+  const lastSeasonFor = useCallback((memberId: string) => lastSeasonStats[memberId] ?? null, [lastSeasonStats]);
+  const tierEventsFor = useCallback(
+    (memberId: string) => tierEvents.filter((event) => event.member_id === memberId),
+    [tierEvents],
+  );
 
   /** 지금까지 본 가장 최근 한마디 시각을 기억해, 다음에 새 글만 알려 줍니다. */
   const markNotesSeen = useCallback(() => {
@@ -840,6 +1186,15 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       addNote,
       deleteNote,
       enablePush,
+      seasonStatsFor,
+      lastSeasonFor,
+      tierEvents,
+      tierEventsFor,
+      tierEventsState,
+      rewardSettings,
+      openReward,
+      useReward,
+      saveRewardSettings,
       parentUnlocked: sessionPin !== null,
       parentPinSetupRequired: mode === 'local' && !localPinReady && syncState !== 'syncing',
       unlockParent,
@@ -869,6 +1224,15 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     addNote,
     deleteNote,
     enablePush,
+    seasonStatsFor,
+    lastSeasonFor,
+    tierEvents,
+    tierEventsFor,
+    tierEventsState,
+    rewardSettings,
+    openReward,
+    useReward,
+    saveRewardSettings,
     sessionPin,
     localPinReady,
     unlockParent,

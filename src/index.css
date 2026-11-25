@@ -34,3 +34,46 @@
 input[type='date']::-webkit-calendar-picker-indicator {
   opacity: 0.45;
 }
+
+/* 🎁 뽑기 상자 — 두근거리며 열리는 연출 */
+@keyframes box-shake {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  15% { transform: rotate(-10deg) scale(1.06); }
+  35% { transform: rotate(9deg) scale(1.05); }
+  55% { transform: rotate(-7deg) scale(1.04); }
+  75% { transform: rotate(5deg) scale(1.02); }
+}
+
+.animate-box-shake {
+  animation: box-shake 0.65s ease-in-out;
+  transform-origin: 50% 60%;
+}
+
+@keyframes box-idle {
+  0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+  50% { transform: translateY(-2px) rotate(1.5deg); }
+}
+
+.animate-box-idle {
+  animation: box-idle 2.6s ease-in-out infinite;
+}
+
+@keyframes reward-pop {
+  0% { transform: scale(0.55); opacity: 0; }
+  55% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-reward-pop {
+  animation: reward-pop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.35) both;
+}
+
+@keyframes sparkle {
+  0% { transform: translateY(4px) scale(0.5); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translateY(-16px) scale(1.15); opacity: 0; }
+}
+
+.animate-sparkle {
+  animation: sparkle 0.95s ease-out both;
+}

@@ -5,6 +5,8 @@ import { summarize } from '../lib/store';
 import type { Member, Task } from '../lib/types';
 import { PlusIcon } from './icons';
 import { TaskCard } from './TaskCard';
+import { TierEmblemFor } from './TierBadge';
+import { TierPanel } from './TierPanel';
 
 interface ChildBoardProps {
   member: Member;
@@ -47,6 +49,7 @@ export function ChildBoard({
         </span>
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-1 text-[13.5px] font-extrabold text-slate-900">
+            {member.role === 'child' ? <TierEmblemFor memberId={member.id} size="sm" /> : null}
             {member.name}
             {member.grade ? (
               <span data-testid={`member-grade-${member.id}`} className="text-[9.5px] font-bold text-slate-400">
@@ -85,6 +88,8 @@ export function ChildBoard({
           </button>
         ) : null}
       </header>
+
+      {member.role === 'child' ? <TierPanel member={member} /> : null}
 
       {tasks.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-center">

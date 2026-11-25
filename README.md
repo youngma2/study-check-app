@@ -88,6 +88,13 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
     지난 기록이 없으면 그 아이의 빠른 추가 항목(presets)을 씁니다. (`src/lib/defaults.ts`)
   - 일요일·공휴일에는 넣지 않고 `쉬는 날에는 기본 목록을 넣지 않아요` 안내만 보여 줍니다.
   - 가족마다 다른 항목은 코드에 적지 않습니다(DB 의 실제 기록만 보고 정합니다). SQL 도 더 필요 없습니다.
+- **🏆 티어 스트립 (아이 카드 안)**: 아이 이름 옆에 그 달 등급 엠블럼(`방패·보석·왕관` SVG)이 붙고,
+  카드 안에 `티어 이름 · XP · 다음 단계까지 게이지 · 🔥 달성률 100% N일차` 가 한눈에 들어옵니다.
+  아이 화면에서는 상단 머리글 아래 **한 줄 시즌 바**(티어·XP·게이지·🔥일차·남은 🎁)가 늘 보입니다.
+  티어가 오르면 이름 옆 아이콘도 그 티어로 저절로 바뀝니다.
+- **🎁 보상 뽑기 상자 (아이 카드 안)**: 큰 티어가 바뀔 때마다 상자 1개. 누르면 두근거리며 열려
+  `+5·10·15·20분` 게임 시간이 뽑히고, 뽑힌 내역(언제·어느 티어·몇 분)이 카드에 남습니다.
+  부모는 `사용 완료` 로 처리합니다(부모 관리 PIN).
 - **아이별 체크리스트**: 상태 배지(할 일 / 완료), 완료 카드에는 `오후 8:42 완료` 처럼 체크한 시각.
   - 아직 안 온 날짜(내일·다음 주)의 항목은 `🔒 완료` 로 회색 잠금 — 누를 수 없고, 그날이 되면 `완료` 버튼이 됩니다.
   - 이름 옆 학년은 3월 1일마다 자동으로 한 학년 올라갑니다(`초4` → 이듬해 3월 `초5`). 프로필 시트도 같습니다.
@@ -190,7 +197,10 @@ families(id text, name)
   ├ family_notes(id text, family_id, author_id, content, created_at, push_sent_at?)   ← 💬 우리 가족 한마디
   ├ family_secrets(family_id text primary key, parent_pin_hash text)   ← 부모 관리 PIN 해시 (anon 접근 불가)
   ├ push_subscriptions(endpoint text primary key, family_id, member_id, p256dh, auth, ...) ← 🔔 기기별 구독 (anon 접근 불가)
-  └ push_config(key text primary key, value text)                      ← 🔔 함수 주소·훅 비밀값·VAPID 키 (공개키 한 줄만 anon 읽기)
+  ├ push_config(key text primary key, value text)                      ← 🔔 함수 주소·훅 비밀값·VAPID 키 (공개키 한 줄만 anon 읽기)
+  ├ family_tier_events(id text, family_id, member_id, season, tier, tier_rank, level, division,
+  │                    box_minutes?, created_at, opened_at?, used_at?, used_by?)  ← 🏆 승급 기록 + 🎁 상자
+  └ family_reward_settings(family_id text primary key, pool int[], notify_box, notify_step)  ← 🎁 뽑기 설정
 ```
 
 - 아이디는 사람이 읽을 수 있는 text 입니다(`fam_our_home`, `mem_dad`, `t_mem_child1_2026-11-23_0`).
@@ -249,6 +259,31 @@ select key, left(value, 12) from push_config;                     -- 설정(개�
 함수 상태는 브라우저에서 `https://<프로젝트>.supabase.co/functions/v1/send-note-push?action=health` 로도 볼 수 있습니다
 (구독 수·설정 키 목록).
 
+### 🏆 월간 시즌 티어 · 🎁 보상 뽑기 상자
+
+아이가 그 달에 **부모가 확인 완료(verified)한 공부**로 XP 를 모아 등급을 올립니다. 달이 바뀌면 새 시즌(1일 초기화)입니다.
+
+| 무엇 | 규칙 |
+| --- | --- |
+| XP | 확인 완료 1건 **+10** · 그 날 할 일 100%면 **+20** · **3일 이상 연속 100%**면 그 뒤로 매일 **+10** |
+| 티어 | 🥉브론즈 0–99 · 🥈실버 100–249 · 🥇골드 250–449 · 💠플래티넘 450–699 · 💎다이아 700–999 · 👑마스터 1000+ |
+| 세부 단계 | 마스터를 뺀 5단계는 **III → II → I** 로 3등분 (총 16칸) → 하루이틀마다 한 칸씩 오릅니다 |
+| 🔥 연속 100% | **평일(월~금, 공휴일 제외)** 만 셉니다. 토·일·공휴일은 일수에 넣지도, 못 했다고 끊지도 않습니다. 평일에 100%를 못 채우면 0일차로 돌아갑니다 |
+| 지난달 | 지난달 최고 티어를 배지로 함께 보여 줍니다 |
+| 🎁 상자 | **큰 티어가 바뀔 때만** 1개 — 브론즈→실버, 실버→골드, 골드→플래티넘, 플래티넘→다이아, 다이아→마스터 |
+| 보상 | `+5·10·15·20분` 게임 시간에서 뽑기(플래티넘부터 큰 보상 확률 ↑). 부모가 `사용 완료` 처리 |
+
+**승급 알림(폰 푸시)** — 부모가 확인 완료를 눌러 티어가 오르면, 가족 알림판에 축하 한마디
+(`🎉 찬율이가 [실버 III] 티어로 승급했어요! 🎁 뽑기 상자가 열렸어요!`)가 올라가고
+기존 `family_notes` 트리거가 그대로 **폰 알림**을 보냅니다. 한 승급 = 한 줄(`family_tier_events`)이라
+폰이 여러 대여도 같은 승급을 두 번 알리지 않습니다. 알림은 프로필 시트의 `🎁 보상 뽑기 설정` 에서 끌 수 있습니다.
+
+**저장 위치** — `family_tier_events`(승급·상자·사용 완료)와 `family_reward_settings`(뽑기 풀·알림)는
+`supabase/schema.sql` 7번에 들어 있고, 이미 라이브 DB(`trhcatbuoslyjdhezobz`)에 적용했습니다.
+쓰기는 RPC 로만 됩니다 — `study_tier_promotion`(승급 기록+상자+축하 한마디) · `study_open_reward`(상자 열기) ·
+`study_use_reward`(부모+PIN 사용 완료) · `study_set_reward_settings`(부모+PIN 설정).
+Supabase 없이 이 기기에만 저장하는 데모 모드에서는 같은 규칙으로 `localStorage` 에 남습니다.
+
 ## 6. 폴더 구조
 
 ```
@@ -268,6 +303,8 @@ src/
     ParentPinGate.tsx     부모 관리 PIN 잠금 화면 (숫자 키패드)
     ProfileSheet.tsx      역할 전환 시트 (아빠·엄마 + PIN 배지 · 관리 잠금 · 이름 바꾸기)
     FamilyNotesBoard.tsx  💬 우리 가족 한마디 (날짜별 알림판 · 실시간 · 안 읽은 글 배너)
+    TierBadge.tsx         🏆 티어 엠블럼 SVG (방패·보석·왕관) + 이름 옆 배지
+    TierPanel.tsx         🏆 시즌 스트립·상단 시즌 바·🎁 뽑기 상자(열기 연출·사용 완료)
     Sheet.tsx             바텀시트 공통
     icons.tsx             인라인 SVG 아이콘
   lib/
@@ -471,6 +508,18 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 
 스크린샷: `/workspace/downloads/study_app_child_completed.png`(아이 완료 시각), `study_app_parent_pin.png`(PIN 잠금),
 `study_app_parent_unlocked.png`(부모 화면), `study_app_copy_sheet.png`(복사 시트), `study_app_holiday.png`(성탄절 빨간 표시)
+
+- **🏆 월간 티어 · 🔥 연속 100% · 🎁 뽑기 상자 · PIN 진동** (2026-11-25)
+  - 계산: `node scripts/verify-season.mjs` (**86개 통과**) — XP 구간 28경계·16칸 왕복·연속 100%(주말/공휴일 제외,
+    평일 미달 시 0일차, 오늘 진행 중이면 어제까지 유지)·📞 통화 항목 제외·월 경계·지난달 티어·뽑기 분포
+  - 화면: `python3 scripts/verify-tier-ui.py` (**25개 통과**, 데모 빌드) — 티어 이름/XP/게이지, `🔥 7일차`,
+    이름 옆·머리글·상단 바 엠블럼, 상자 2개(실버·골드), 눌러서 열기 연출 뒤 보상 표시, 새로고침 중복 없음,
+    부모 PIN 화면 → 사용 완료 · 보상 설정 저장
+  - PIN 진동: `python3 scripts/verify-pin-vibrate.py` (**8개 통과**) — 숫자·지우기 15ms, 틀린 PIN `[30,50,30]`,
+    vibrate 없는 기기에서도 오류 0
+  - 라이브 DB(`trhcatbuoslyjdhezobz`): `family_tier_events`·`family_reward_settings` 생성, RPC 4개 실호출 —
+    중복 호출은 `created:false`, 세부 단계(4·5)는 상자 없음 / 큰 티어(3·6)만 상자, 아이가 설정 변경 42501,
+    부모 PIN 없이 사용 완료 42501. 승급 한마디 → `push_sent_at` 1초 뒤 채워짐(= 트리거·함수 실제 발송)
 
 ## 9. 다음에 붙이면 좋은 것
 

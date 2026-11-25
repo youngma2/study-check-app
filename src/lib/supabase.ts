@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { RemoteEvent, StorageAdapter, StorageChange, StorageKind } from './storage';
 import type { Family, FamilyNote, Member, MemberColor, Role, StudyDB, Task, TaskPreset, TaskStatus } from './types';
+import { normalizeSettings, type RewardSettings, type TierEvent } from './rewards';
+import type { TierKey } from './season';
 
 /**
  * Supabase 연결 (가족 실시간 동기화).
@@ -152,6 +154,47 @@ function toNote(row: FamilyNoteRow): FamilyNote {
 export type NotesRemoteEvent =
   | { kind: 'upsert'; note: FamilyNote }
   | { kind: 'delete'; noteId: string };
+
+/* 🏆 시즌 티어 · 🎁 보상 뽑기 상자 (supabase/tier-season.sql) */
+
+interface TierEventRow {
+  id: string;
+  family_id: string;
+  member_id: string;
+  season: string;
+  tier: TierKey;
+  tier_rank: number;
+  level: number;
+  division: number;
+  box_minutes: number | null;
+  created_at: string;
+  opened_at: string | null;
+  used_at: string | null;
+  used_by: string | null;
+}
+
+function toTierEvent(row: TierEventRow): TierEvent {
+  return {
+    id: row.id,
+    family_id: row.family_id,
+    member_id: row.member_id,
+    season: row.season,
+    tier: (row.tier as TierKey) ?? 'bronze',
+    tier_rank: row.tier_rank,
+    level: row.level,
+    division: row.division,
+    box_minutes: row.box_minutes ?? null,
+    created_at: row.created_at,
+    opened_at: row.opened_at ?? null,
+    used_at: row.used_at ?? null,
+    used_by: row.used_by ?? null,
+  };
+}
+
+/** 다른 기기에서 연 상자·사용 완료 표시 */
+export type TierRemoteEvent =
+  | { kind: 'upsert'; event: TierEvent }
+  | { kind: 'delete'; eventId: string };
 
 function toTask(row: TaskRow): Task {
   return {
@@ -412,6 +455,125 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     });
     if (error) throw toUserError(error);
     return data === true;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 🏆 시즌 티어 · 🎁 보상 뽑기 상자                                     */
+  /* ---------------------------------------------------------------- */
+
+  /** 승급 기록 — 표가 아직 없으면(설정 전) null. */
+  async loadTierEvents(): Promise<TierEvent[] | null> {
+    const res = await this.client
+      .from('family_tier_events')
+      .select('*')
+      .order('created_at', { ascending: true })
+      .limit(400)
+      .retry(false);
+    if (res.error) {
+      if (isMissingSchema(res.error)) return null;
+      throw toUserError(res.error);
+    }
+    return ((res.data ?? []) as TierEventRow[]).map(toTierEvent);
+  }
+
+  async loadRewardSettings(familyId: string): Promise<RewardSettings | null> {
+    const res = await this.client
+      .from('family_reward_settings')
+      .select('pool, notify_box, notify_step')
+      .eq('family_id', familyId)
+      .limit(1)
+      .retry(false);
+    if (res.error) {
+      if (isMissingSchema(res.error)) return null;
+      throw toUserError(res.error);
+    }
+    const row = ((res.data ?? []) as Array<Partial<RewardSettings>>)[0];
+    return normalizeSettings(row ?? {});
+  }
+
+  /**
+   * 승급 한 칸 기록. 큰 티어면 서버가 상자와 축하 한마디(=폰 푸시)를 함께 만듭니다.
+   * 같은 칸은 한 번만 만들어져서, 폰이 여러 대여도 알림이 중복되지 않습니다.
+   */
+  async tierPromotion(
+    actorId: string,
+    memberId: string,
+    season: string,
+    level: number,
+    notify: boolean,
+  ): Promise<{ created: boolean; noted: boolean; event: TierEvent | null }> {
+    const { data, error } = await this.client.rpc('study_tier_promotion', {
+      p_actor_id: actorId,
+      p_member_id: memberId,
+      p_season: season,
+      p_level: level,
+      p_notify: notify,
+    });
+    if (error) throw toUserError(error);
+    const payload = (data ?? {}) as { created?: boolean; noted?: boolean; event?: TierEventRow | null };
+    return {
+      created: payload.created === true,
+      noted: payload.noted === true,
+      event: payload.event ? toTierEvent(payload.event) : null,
+    };
+  }
+
+  async openReward(actorId: string, eventId: string): Promise<TierEvent> {
+    const { data, error } = await this.client.rpc('study_open_reward', {
+      p_actor_id: actorId,
+      p_event_id: eventId,
+    });
+    if (error) throw toUserError(error);
+    if (!data) throw new Error('상자를 열지 못했어요.');
+    return toTierEvent(data as TierEventRow);
+  }
+
+  async useReward(actorId: string, eventId: string, pin?: string | null): Promise<TierEvent> {
+    const { data, error } = await this.client.rpc('study_use_reward', {
+      p_actor_id: actorId,
+      p_event_id: eventId,
+      p_pin: pin ?? null,
+    });
+    if (error) throw toUserError(error);
+    if (!data) throw new Error('사용 완료로 바꾸지 못했어요.');
+    return toTierEvent(data as TierEventRow);
+  }
+
+  async saveRewardSettings(actorId: string, settings: RewardSettings, pin?: string | null): Promise<RewardSettings> {
+    const { data, error } = await this.client.rpc('study_set_reward_settings', {
+      p_actor_id: actorId,
+      p_pool: settings.pool,
+      p_notify_box: settings.notify_box,
+      p_notify_step: settings.notify_step,
+      p_pin: pin ?? null,
+    });
+    if (error) throw toUserError(error);
+    const row = (data ?? {}) as Partial<RewardSettings> & { pool?: number[] | null };
+    return normalizeSettings({ ...settings, ...row, pool: row.pool ?? settings.pool });
+  }
+
+  /** 승급 기록·상자 변경을 실시간으로 받습니다. */
+  subscribeTierEvents(familyId: string, onEvent: (event: TierRemoteEvent) => void): () => void {
+    const channel = this.client
+      .channel(`study-tier:${familyId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'family_tier_events', filter: `family_id=eq.${familyId}` },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            const id = (payload.old as { id?: string } | null)?.id;
+            if (id) onEvent({ kind: 'delete', eventId: id });
+            return;
+          }
+          const row = payload.new as TierEventRow | null;
+          if (row?.id) onEvent({ kind: 'upsert', event: toTierEvent(row) });
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void this.client.removeChannel(channel);
+    };
   }
 
   /** 구성원 이름 바꾸기 — 부모 + PIN. (아이디는 그대로라 링크·숙제가 유지됩니다) */

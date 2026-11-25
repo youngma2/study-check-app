@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { cx } from '../lib/cx';
+import { vibrateError, vibrateKey } from '../lib/haptics';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
 import { LockIcon, ChevronLeftIcon } from './icons';
@@ -60,6 +61,7 @@ export function ParentPinGate({ familyName, mode, targetName, children, onSubmit
 
       if (mode === 'setup' && step === 'confirm') {
         if (pin !== firstPin) {
+          vibrateError();
           setError('두 번 입력한 PIN이 달라요. 처음부터 다시 해 주세요.');
           setStep('enter');
           setFirstPin(null);
@@ -72,6 +74,7 @@ export function ParentPinGate({ familyName, mode, targetName, children, onSubmit
       const result = await onSubmit(pin);
       setPending(false);
       if (!result.ok) {
+        vibrateError();
         setError(result.error ?? 'PIN을 확인하지 못했어요.');
         setDigits('');
       }
@@ -82,6 +85,7 @@ export function ParentPinGate({ familyName, mode, targetName, children, onSubmit
   const press = useCallback(
     (key: string) => {
       if (submitting) return;
+      vibrateKey();
       if (key === 'del') {
         setDigits((prev) => prev.slice(0, -1));
         return;
@@ -124,7 +128,10 @@ export function ParentPinGate({ familyName, mode, targetName, children, onSubmit
           <button
             type="button"
             data-testid="cancel-parent-gate"
-            onClick={onCancel}
+            onClick={() => {
+              vibrateKey();
+              onCancel();
+            }}
             className="mt-1 flex items-center gap-0.5 rounded-full py-1.5 pl-1 pr-2.5 text-[11.5px] font-bold text-slate-400 transition hover:bg-white hover:text-slate-600 active:scale-95"
           >
             <ChevronLeftIcon className="h-3.5 w-3.5" />

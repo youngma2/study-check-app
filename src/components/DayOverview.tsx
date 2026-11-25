@@ -3,6 +3,7 @@ import type { TaskSummary } from '../lib/store';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
 import { cx } from '../lib/cx';
+import { TierEmblemFor } from './TierBadge';
 
 /** 그 날 한 사람의 진행 상황 — 이름은 항상 members 에서 오고, 코드에 이름을 적지 않습니다. */
 export interface MemberDayStat {
@@ -108,6 +109,7 @@ function MemberStatCard({
             wide ? 'text-[13px]' : 'text-[12px]',
           )}
         >
+          {member.role === 'child' ? <TierEmblemFor memberId={member.id} size="xs" className="mr-0.5 inline-block align-[-2px]" /> : null}
           {member.name}
         </span>
         {member.role === 'parent' ? (

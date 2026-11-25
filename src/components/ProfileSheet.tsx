@@ -7,6 +7,8 @@ import type { SyncState } from '../lib/study-context';
 import type { Member } from '../lib/types';
 import { Sheet } from './Sheet';
 import { CheckIcon, LockIcon, PencilIcon } from './icons';
+import { TierEmblemFor } from './TierBadge';
+import { useStudy } from '../lib/study-context';
 
 interface ProfileSheetProps {
   open: boolean;
@@ -35,6 +37,23 @@ const SYNC_TEXT: Record<SyncState, string> = {
   error: '클라우드 연결 실패 · 이 기기에 저장 중',
 };
 
+function Switch({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden
+      style={{ height: 18, width: 32 }}
+      className={cx(
+        'relative inline-flex shrink-0 items-center rounded-full transition',
+        on ? 'bg-emerald-500' : 'bg-slate-300',
+      )}
+    >
+      <span
+        className={cx('absolute h-3.5 w-3.5 rounded-full bg-white shadow transition-all', on ? 'left-[16px]' : 'left-[2px]')}
+      />
+    </span>
+  );
+}
+
 const REALTIME_TEXT: Record<RealtimeState, string> = {
   off: '실시간 연결 끊김',
   connecting: '실시간 연결 중…',
@@ -60,6 +79,9 @@ export function ProfileSheet({
 }: ProfileSheetProps) {
   const parents = members.filter((member) => member.role === 'parent');
   const children = members.filter((member) => member.role === 'child');
+  const study = useStudy();
+  const [rewardError, setRewardError] = useState<string | null>(null);
+  const [savingRewards, setSavingRewards] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -128,6 +150,7 @@ export function ProfileSheet({
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-1.5 text-[13px] font-extrabold text-slate-900">
+                {member.role === 'child' ? <TierEmblemFor memberId={member.id} size="sm" /> : null}
                 {member.name}
                 {member.grade ? (
                   <span data-testid={`profile-grade-${member.id}`} className="text-[9.5px] font-bold text-slate-400">
@@ -213,6 +236,28 @@ export function ProfileSheet({
     );
   };
 
+  const togglePool = async (minutes: number) => {
+    const pool = study.rewardSettings.pool;
+    const nextPool = pool.includes(minutes) ? pool.filter((value) => value !== minutes) : [...pool, minutes].sort((a, b) => a - b);
+    if (nextPool.length === 0) {
+      setRewardError('보상은 한 가지 이상 남겨 주세요.');
+      return;
+    }
+    setSavingRewards(true);
+    setRewardError(null);
+    const result = await study.saveRewardSettings({ pool: nextPool });
+    setSavingRewards(false);
+    if (!result.ok) setRewardError(result.error ?? '설정을 저장하지 못했어요');
+  };
+
+  const toggleNotify = async (key: 'notify_box' | 'notify_step') => {
+    setSavingRewards(true);
+    setRewardError(null);
+    const result = await study.saveRewardSettings({ [key]: !study.rewardSettings[key] });
+    setSavingRewards(false);
+    if (!result.ok) setRewardError(result.error ?? '설정을 저장하지 못했어요');
+  };
+
   return (
     <Sheet
       open={open}
@@ -242,6 +287,56 @@ export function ProfileSheet({
           <p className="mb-1.5 px-1 text-[10px] font-extrabold tracking-wide text-slate-400">아이</p>
           <div className="space-y-1.5">{children.map(renderRow)}</div>
         </div>
+
+        {viewerIsParent ? (
+          <div data-testid="reward-settings" className="rounded-2xl bg-white px-3 py-2.5 ring-1 ring-slate-900/5">
+            <p className="text-[10px] font-extrabold tracking-wide text-slate-400">🎁 보상 뽑기 설정</p>
+            <p className="mt-1 text-[10px] font-semibold text-slate-500">상자에서 나올 수 있는 게임 시간</p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {[5, 10, 15, 20].map((minutes) => {
+                const on = study.rewardSettings.pool.includes(minutes);
+                return (
+                  <button
+                    key={minutes}
+                    type="button"
+                    data-testid={`pool-${minutes}`}
+                    onClick={() => togglePool(minutes)}
+                    disabled={savingRewards}
+                    className={cx(
+                      'rounded-full px-2.5 py-1 text-[10.5px] font-extrabold ring-1 transition active:scale-95 disabled:opacity-60',
+                      on ? 'bg-amber-100 text-amber-700 ring-amber-200' : 'bg-slate-50 text-slate-400 ring-slate-200',
+                    )}
+                  >
+                    +{minutes}분
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-2 space-y-1.5">
+              <button
+                type="button"
+                data-testid="notify-box"
+                onClick={() => toggleNotify('notify_box')}
+                disabled={savingRewards}
+                className="flex w-full items-center justify-between gap-2 text-left"
+              >
+                <span className="text-[10.5px] font-bold text-slate-600">큰 티어 승급 알림 (뽑기 상자)</span>
+                <Switch on={study.rewardSettings.notify_box} />
+              </button>
+              <button
+                type="button"
+                data-testid="notify-step"
+                onClick={() => toggleNotify('notify_step')}
+                disabled={savingRewards}
+                className="flex w-full items-center justify-between gap-2 text-left"
+              >
+                <span className="text-[10.5px] font-bold text-slate-600">세부 단계 승급 알림</span>
+                <Switch on={study.rewardSettings.notify_step} />
+              </button>
+            </div>
+            {rewardError ? <p className="mt-1 text-[10px] font-bold text-rose-500">{rewardError}</p> : null}
+          </div>
+        ) : null}
 
         <div className="rounded-2xl bg-slate-50 px-3 py-2.5 ring-1 ring-slate-900/5">
           <p className="text-[10.5px] font-semibold text-slate-500">
