@@ -43,6 +43,7 @@ import {
   type NotesState,
 } from './notes';
 import { LocalStorageAdapter, type RemoteEvent, type RealtimeState, type StorageChange, type StorageKind } from './storage';
+import { enablePushNotifications, syncPushRegistration } from './push';
 import { StorageSetupError, createSupabaseAdapter, type NotesRemoteEvent } from './supabase';
 import type { FamilyNote, Member, NewTaskInput, StudyDB, Task, TaskStatus } from './types';
 
@@ -86,6 +87,8 @@ export interface StudyContextValue {
   markNotesSeen: () => void;
   addNote: (content: string, dateIso?: string) => Promise<ActionResult>;
   deleteNote: (noteId: string) => Promise<ActionResult>;
+  /** 🔔 백그라운드 알림 켜기 — 알림 권한 요청 + 이 기기를 가족 알림에 등록 */
+  enablePush: () => Promise<ActionResult>;
   tasksFor: (memberId: string, dateIso: string) => Task[];
   summaryFor: (memberId: string, dateIso: string) => TaskSummary;
   addTask: (input: NewTaskInput) => Promise<ActionResult>;
@@ -384,6 +387,28 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     },
     [cloud],
   );
+
+  /** 🔔 백그라운드 알림 켜기 — 앱을 닫아 둬도 새 한마디가 폰 알림으로 오게 합니다. */
+  const enablePush = useCallback(async (): Promise<ActionResult> => {
+    const current = dbRef.current;
+    const actor =
+      current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
+    if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+
+    const result = await enablePushNotifications(cloud, actor.id);
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  }, [cloud]);
+
+  // 알림을 이미 허용해 둔 기기는 앱을 열 때마다 조용히 다시 등록합니다.
+  // (예전에 '알림 켜기'만 눌렀던 폰도, 구독이 바뀐 폰도 스스로 회복됩니다)
+  useEffect(() => {
+    if (!cloud || mode !== 'supabase' || syncState !== 'synced') return;
+    const current = dbRef.current;
+    const actor =
+      current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
+    if (!actor) return;
+    void syncPushRegistration(cloud, actor.id);
+  }, [cloud, mode, syncState, currentMemberId]);
 
   /** 지금까지 본 가장 최근 한마디 시각을 기억해, 다음에 새 글만 알려 줍니다. */
   const markNotesSeen = useCallback(() => {
@@ -814,6 +839,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       markNotesSeen,
       addNote,
       deleteNote,
+      enablePush,
       parentUnlocked: sessionPin !== null,
       parentPinSetupRequired: mode === 'local' && !localPinReady && syncState !== 'syncing',
       unlockParent,
@@ -842,6 +868,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     markNotesSeen,
     addNote,
     deleteNote,
+    enablePush,
     sessionPin,
     localPinReady,
     unlockParent,

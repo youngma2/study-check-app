@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && node scripts/gen-setup.mjs && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "setup-page": "node scripts/gen-setup.mjs"
+    "setup-page": "node scripts/gen-setup.mjs",
+    "test:push": "node scripts/test-webpush.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

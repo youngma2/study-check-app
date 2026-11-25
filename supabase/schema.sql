@@ -30,7 +30,9 @@
 --   families ─┬─ family_members
 --             ├─ tasks
 --             ├─ family_notes (💬 우리 가족 한마디 — 부모·아이 누구나 남기는 알림판)
---             └─ family_secrets (부모 관리 PIN 해시 · 앱에서 직접 읽지 않음)
+--             ├─ family_secrets (부모 관리 PIN 해시 · 앱에서 직접 읽지 않음)
+--             ├─ push_subscriptions (🔔 기기별 백그라운드 알림 구독 · 앱에서 직접 읽지 않음)
+--             └─ push_config (🔔 알림 함수 주소·VAPID 공개키 — 공개키 한 줄만 앱이 읽음)
 --   읽기는 누구나(가족 링크를 아는 기기), 쓰기는 아래 RPC 로만 가능하게 해 두고
 --   RPC 안에서 역할(parent/child)과 PIN 을 검사합니다.
 -- ============================================================================
@@ -56,6 +58,24 @@ begin
         when others then
           -- 로컬 테스트용 PostgreSQL 에 pgcrypto 가 없어도 나머지 스키마는 그대로 만듭니다.
           raise notice 'pgcrypto 확장을 설치하지 못했습니다: %', sqlerrm;
+      end;
+  end;
+end;
+$$;
+
+-- 🔔 백그라운드 알림 트리거가 Edge Function 을 부를 때 쓰는 pg_net.
+--   (확장 자체가 `net` 스키마를 만들기 때문에, 등록 위치와 상관없이 net.http_post 로 부릅니다.)
+do $$
+begin
+  begin
+    create extension if not exists pg_net with schema extensions;
+  exception
+    when others then
+      begin
+        create extension if not exists pg_net;
+      exception
+        when others then
+          raise notice 'pg_net 확장을 켜지 못했습니다(백그라운드 알림만 꺼집니다): %', sqlerrm;
       end;
   end;
 end;
@@ -692,6 +712,201 @@ grant execute on function public.study_rename_member(text, text, text, text) to 
 grant execute on function public.study_update_member_presets(text, text, jsonb, text) to anon, authenticated;
 grant execute on function public.study_add_note(text, text, text) to anon, authenticated;
 grant execute on function public.study_delete_note(text, text, text) to anon, authenticated;
+
+-- ----------------------------------------------------------------------------
+-- 3b. 🔔 백그라운드 알림(Web Push)  — 앱을 완전히 닫아 둬도 새 한마디가 폰 알림으로 옵니다.
+--
+--   흐름:  study_add_note → family_notes INSERT
+--          → 트리거가 pg_net 으로 Edge Function(send-note-push)을 부름
+--          → 함수가 가족의 구독(push_subscriptions)에게 VAPID 서명 + AES-128-GCM 암호화로 push 발송
+--
+--   · 비밀값은 이 파일에 없습니다. 함수가 처음 불릴 때 VAPID 키를 스스로 만들어
+--     push_config 에 넣습니다(공개키만 앱이 읽고, 개인키는 service_role 만 읽습니다).
+--   · Edge Functions 무료 쿼터(월 50만 회)로 충분합니다. 한마디 1건 = 호출 1회.
+--   · pg_net 이 없거나 함수가 아직 없으면 알림만 조용히 건너뜁니다(한마디 저장은 그대로).
+-- ----------------------------------------------------------------------------
+
+-- 알림 설정·키 보관. 앱(anon)은 'vapid_public_key' 한 줄만 읽을 수 있습니다.
+create table if not exists public.push_config (
+  key        text primary key,
+  value      text not null,
+  updated_at timestamptz not null default now()
+);
+
+-- 기기별 push 구독. 읽기·쓰기 모두 RPC/서버(service_role)로만 합니다.
+create table if not exists public.push_subscriptions (
+  endpoint     text primary key,          -- push 서비스가 준 이 기기의 주소
+  family_id    text not null references public.families (id) on delete cascade,
+  member_id    text not null references public.family_members (id) on delete cascade,
+  p256dh       text not null,             -- 기기 공개키(base64url)
+  auth         text not null,             -- 인증 비밀값(base64url)
+  user_agent   text,
+  created_at   timestamptz not null default now(),
+  last_seen_at timestamptz not null default now()
+);
+create index if not exists push_subscriptions_family_idx
+  on public.push_subscriptions (family_id);
+
+-- 한마디마다 알림을 한 번만 보내기 위한 표시.
+-- (트리거가 두 번 불리거나 같은 요청이 반복돼도 두 번 울리지 않습니다.)
+alter table public.family_notes add column if not exists push_sent_at timestamptz;
+
+alter table public.push_config        enable row level security;
+alter table public.push_subscriptions enable row level security;
+
+drop policy if exists study_read_push_public on public.push_config;
+create policy study_read_push_public on public.push_config
+  for select to anon, authenticated using (key = 'vapid_public_key');
+
+grant select on public.push_config to anon, authenticated;
+revoke insert, update, delete on public.push_config from anon, authenticated;
+
+-- 구독 표는 anon 에게 아예 열지 않습니다(정책도 없음).
+revoke all on public.push_subscriptions from anon, authenticated;
+revoke all on public.push_subscriptions from public;
+
+-- 알림 함수(service_role)는 두 표를 읽고 씁니다. (프로젝트 기본 권한이 있어도 한 번 더 명시)
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'grant all on public.push_config, public.push_subscriptions to service_role';
+  end if;
+end;
+$$;
+
+-- 프로젝트 주소·공개키(브라우저 번들에도 들어가는 공개 값)는 트리거가 읽습니다.
+insert into public.push_config (key, value)
+values
+  ('function_url',    'https://trhcatbuoslyjdhezobz.supabase.co/functions/v1/send-note-push'),
+  ('publishable_key', 'sb_publishable_fPzIYHLYLbVmsPB6tLaUNw_z6sAnxbj')
+on conflict (key) do update
+  set value = excluded.value, updated_at = now();
+
+-- 트리거 → 함수 호출을 확인하는 비밀값. 이 파일에서 무작위로 한 번만 만듭니다.
+insert into public.push_config (key, value)
+select 'hook_secret',
+       replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '')
+on conflict (key) do nothing;
+
+-- 이 기기를 알림 대상으로 등록합니다. (앱이 '알림 켜기'에서 한 번 부릅니다)
+create or replace function public.study_register_push(
+  p_actor_id    text,
+  p_endpoint    text,
+  p_p256dh      text,
+  p_auth        text,
+  p_user_agent  text default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_actor public.family_members;
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    raise exception '사용자를 찾을 수 없습니다. 링크를 다시 확인해 주세요.' using errcode = '42501';
+  end if;
+
+  if length(btrim(coalesce(p_endpoint, ''))) < 10 or length(p_endpoint) > 1500 then
+    raise exception '알림 주소가 올바르지 않습니다.' using errcode = '22023';
+  end if;
+  if coalesce(p_p256dh, '') = '' or length(p_p256dh) > 200
+     or coalesce(p_auth, '') = '' or length(p_auth) > 100 then
+    raise exception '알림 키가 올바르지 않습니다.' using errcode = '22023';
+  end if;
+
+  insert into public.push_subscriptions (endpoint, family_id, member_id, p256dh, auth, user_agent)
+  values (p_endpoint, v_actor.family_id, v_actor.id, p_p256dh, p_auth, left(p_user_agent, 200))
+  on conflict (endpoint) do update
+    set family_id    = excluded.family_id,
+        member_id    = excluded.member_id,
+        p256dh       = excluded.p256dh,
+        auth         = excluded.auth,
+        user_agent   = coalesce(excluded.user_agent, public.push_subscriptions.user_agent),
+        last_seen_at = now();
+
+  -- 오래 조용했던 기기 정리(푸시 서비스가 410 을 주기도 전에).
+  delete from public.push_subscriptions where last_seen_at < now() - interval '120 days';
+end;
+$$;
+
+-- 이 기기를 알림 대상에서 뺍니다(같은 가족의 기기만).
+create or replace function public.study_delete_push(
+  p_actor_id text,
+  p_endpoint text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_actor public.family_members;
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    return;
+  end if;
+
+  delete from public.push_subscriptions
+   where endpoint = p_endpoint and family_id = v_actor.family_id;
+end;
+$$;
+
+-- 새 한마디 → Edge Function 호출. 실패해도 한마디 저장은 막지 않습니다.
+create or replace function public.study_push_note_alert()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_url  text;
+  v_key  text;
+  v_hook text;
+begin
+  select value into v_url  from public.push_config where key = 'function_url';
+  select value into v_key  from public.push_config where key = 'publishable_key';
+  select value into v_hook from public.push_config where key = 'hook_secret';
+
+  if coalesce(v_url, '') = '' or coalesce(v_hook, '') = '' then
+    return new;  -- 알림 설정 전
+  end if;
+
+  begin
+    perform net.http_post(
+      url := v_url,
+      body := jsonb_build_object('note_id', new.id),
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'apikey', coalesce(v_key, ''),
+        'x-study-hook', v_hook
+      ),
+      -- 첫 호출은 함수가 깨어나는 데 몇 초 걸립니다(그래도 응답을 기다리지 않고 큐에 들어갑니다).
+      timeout_milliseconds := 10000
+    );
+  exception
+    when others then
+      -- pg_net 미설치·일시 오류: 알림만 건너뜁니다.
+      null;
+  end;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists study_push_note_alert on public.family_notes;
+create trigger study_push_note_alert
+  after insert on public.family_notes
+  for each row execute function public.study_push_note_alert();
+
+revoke all on function public.study_register_push(text, text, text, text, text) from public;
+revoke all on function public.study_delete_push(text, text) from public;
+revoke all on function public.study_push_note_alert() from public;
+grant execute on function public.study_register_push(text, text, text, text, text) to anon, authenticated;
+grant execute on function public.study_delete_push(text, text) to anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 4. Realtime — 이 테이블들의 변경이 폰으로 즉시 전달되게 합니다.

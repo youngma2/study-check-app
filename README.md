@@ -6,6 +6,7 @@
 - 대상: 아빠 · 엄마 · 첫째(중1) · 둘째(초4)
 - 스택: **Vite + React 18 + TypeScript + Tailwind CSS**, 저장은 `localStorage`(데모) 또는 **Supabase**(클라우드)
 - 모바일 우선(390×844 기준) · 한국어 UI · PWA 설치 가능(manifest + 서비스 워커)
+- 💬 우리 가족 한마디 — 날짜별 알림판, 실시간 반영, **🔔 앱을 닫아도 오는 백그라운드 알림**(Web Push·무료)
 
 ---
 
@@ -117,7 +118,8 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
 쓰기는 DB RPC 가 `actor`(누가)와 (필요하면) 부모 관리 PIN 을 받아 권한을 검사합니다.
 
 1. Supabase 프로젝트 → **SQL Editor** 에서 [`supabase/schema.sql`](supabase/schema.sql) 전체 실행 (한 번, 여러 번 실행해도 안전)
-   - 공부 목록 표와 함께 **💬 우리 가족 한마디** 알림판 표(`family_notes`)도 이 SQL 로 만들어집니다.
+   - 공부 목록 표와 함께 **💬 우리 가족 한마디** 알림판 표(`family_notes`)와 🔔 알림용 트리거·표도 이 SQL 로 만들어집니다.
+   - 🔔 **앱을 닫아도 오는 알림**까지 쓰려면 Edge Function `send-note-push` 를 한 번 올려야 합니다 → 아래 [백그라운드 알림](#-백그라운드-알림web-push--앱을-완전히-닫아도-오는-알림) 참고.
    - 배포 페이지에 복사 버튼이 있는 안내 페이지도 있습니다: **https://youngma2.github.io/study-check-app/setup.html**
 2. **부모 관리 PIN 정하기** — SQL Editor 에서 한 번만 (PIN 숫자는 저장소에 적지 않습니다):
    ```sql
@@ -162,6 +164,8 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 | `study_update_member_presets` | 구성원 '빠른 추가' 항목(presets)을 `[{"title":"...","subject":"..."}]` 배열로 바꾸기 | 부모 + `p_pin` |
 | `study_add_note` | 💬 한마디 남기기 | 가족이면 누구나(부모·아이) |
 | `study_delete_note` | 💬 한마디 지우기 | 내 글은 누구나 / 남의 글은 부모 + `p_pin` |
+| `study_register_push` | 🔔 이 기기를 백그라운드 알림 대상으로 등록/갱신 | 가족이면 누구나(자기 기기) |
+| `study_delete_push` | 🔔 이 기기를 알림 대상에서 빼기 | 같은 가족의 기기만 |
 
 - `study_verify_parent_pin` 은 **틀린 횟수 제한이 없는 4자리 확인**이라, 가족 링크를 공개된 곳에 두면 안 됩니다.
   필요하면 시도 제한(lock-out)이나 더 긴 PIN 으로 바꿀 수 있습니다.
@@ -183,8 +187,10 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 families(id text, name)
   ├ family_members(id text, family_id, name, role['parent'|'child'], grade?, emoji, color, presets)
   ├ tasks(id text, family_id, member_id, title, subject, due_date, status, note?, created_by, verified_by?, verified_at?)
-  ├ family_notes(id text, family_id, author_id, content, created_at)   ← 💬 우리 가족 한마디
-  └ family_secrets(family_id text primary key, parent_pin_hash text)   ← 부모 관리 PIN 해시 (anon 접근 불가)
+  ├ family_notes(id text, family_id, author_id, content, created_at, push_sent_at?)   ← 💬 우리 가족 한마디
+  ├ family_secrets(family_id text primary key, parent_pin_hash text)   ← 부모 관리 PIN 해시 (anon 접근 불가)
+  ├ push_subscriptions(endpoint text primary key, family_id, member_id, p256dh, auth, ...) ← 🔔 기기별 구독 (anon 접근 불가)
+  └ push_config(key text primary key, value text)                      ← 🔔 함수 주소·훅 비밀값·VAPID 키 (공개키 한 줄만 anon 읽기)
 ```
 
 - 아이디는 사람이 읽을 수 있는 text 입니다(`fam_our_home`, `mem_dad`, `t_mem_child1_2026-11-23_0`).
@@ -192,6 +198,56 @@ families(id text, name)
 - `verified_at` 이 곧 **완료 체크한 시각**입니다(카드의 `오후 8:42 완료`).
 - `StorageAdapter`(`src/lib/storage.ts`)만 갈아끼우면 저장소가 바뀝니다.
   Supabase 어댑터는 스냅샷 덮어쓰기가 아니라 **한 건씩 RPC** 로 보내고, Realtime 으로 받습니다.
+
+### 🔔 백그라운드 알림(Web Push) — 앱을 완전히 닫아도 오는 알림
+
+새 한마디가 올라오면 **그 폰에서 앱·브라우저를 완전히 닫아 둬도** OS 알림으로 옵니다.
+서버는 따로 두지 않습니다. Supabase 무료 쿼터(Edge Functions **월 50만 회**)로 충분합니다 — 한마디 1건 = 호출 1회.
+
+```
+[보내는 폰] study_add_note → family_notes INSERT
+     └─ 트리거 study_push_note_alert()  (pg_net, 비동기라 저장을 막지 않음)
+          └─ POST /functions/v1/send-note-push  { note_id }   + x-study-hook: <비밀값>
+               └─ Edge Function(send-note-push)
+                    · push_sent_at 로 '이 한마디는 한 번만' 표시
+                    · 글쓴이 기기는 빼고, 같은 가족의 구독으로
+                    · RFC 8291(aes128gcm) 암호화 + RFC 8292(VAPID ES256) 서명 → push 서비스(FCM·Mozilla·Apple)
+[받는 폰] 서비스 워커 push → showNotification  →  누르면 notificationclick: 알림 닫고 그 날짜 알림판으로
+```
+
+**준비(두 번만, 사람이 직접)**
+
+1. **SQL 한 번** — `supabase/schema.sql` 전체 실행(이미 했다면 다시 실행해도 됩니다).
+   트리거·`push_subscriptions`·`push_config`·`pg_net` 이 함께 준비됩니다.
+2. **Edge Function 한 번** — Supabase 대시보드 → **Edge Functions** → *Deploy a new function* → **Via Editor** →
+   이름 `send-note-push` → 편집기의 기본 코드를 지우고 [`supabase/functions/send-note-push/`](supabase/functions/send-note-push)
+   코드를 붙여넣고 **Deploy**. (한 파일로 합친 코드가 **setup.html** 의 `함수 코드 복사` 버튼에 있습니다.)
+   - **비밀값을 넣을 필요가 없습니다.** VAPID 키는 함수가 처음 불릴 때 스스로 만들어 `push_config` 에 저장합니다
+     (공개키만 앱이 읽고, 개인키는 `service_role` 만 읽습니다).
+   - `Verify JWT` 는 기본값 그대로 두면 됩니다. 알림이 안 오면 이 옵션을 꺼 보세요(요청 검증은 함수가 `x-study-hook` 으로 합니다).
+3. 각자 폰에서 앱을 열고 **💬 우리 가족 한마디 → 🔔 알림 켜기** 를 한 번 누릅니다.
+   - 이미 알림을 허용해 둔 기기는 앱을 열 때마다 **조용히 다시 등록**됩니다(구독이 바뀌어도 스스로 회복).
+   - 아이폰은 **홈 화면에 추가한 뒤** 연 앱에서만 백그라운드 알림이 됩니다(iOS 16.4+).
+
+**설계에서 지킨 것**
+
+- 비밀값은 저장소·브라우저 번들에 넣지 않습니다. 트리거와 함수 사이는 SQL 이 만든 무작위 `hook_secret` 으로 확인합니다.
+- `push_config` 는 RLS 정책으로 **`vapid_public_key` 한 줄만** anon 이 읽습니다. 구독 표(`push_subscriptions`)는 anon 에게 아예 닫혀 있습니다.
+- 암호화는 외부 라이브러리 없이 WebCrypto 만 씁니다(`supabase/functions/send-note-push/webpush.ts`). `npm run test:push` 로
+  브라우저가 하는 복호화를 그대로 재현해 검사합니다.
+- 알림 실패가 한마디 저장을 막지 않습니다(트리거가 예외를 삼킴). 같은 한마디는 `push_sent_at` 으로 두 번 울리지 않습니다.
+- 410/404(사라진 기기)·401/403(키가 바뀐 구독)은 함수가 구독 표에서 지웁니다.
+
+**확인·문제 찾기**
+
+```sql
+select * from net._http_response order by created desc limit 5;   -- 트리거가 함수를 불렀는지
+select endpoint, member_id, last_seen_at from push_subscriptions; -- 등록된 기기
+select key, left(value, 12) from push_config;                     -- 설정(개인키는 앞 12자만)
+```
+
+함수 상태는 브라우저에서 `https://<프로젝트>.supabase.co/functions/v1/send-note-push?action=health` 로도 볼 수 있습니다
+(구독 수·설정 키 목록).
 
 ## 6. 폴더 구조
 
@@ -225,10 +281,16 @@ src/
     defaults.ts           '기본 목록' — 같은 요일 패턴의 지난 기록으로 그 날 채우기
     notes.ts              💬 한마디 날짜(noteDate)·기기 저장·안 읽은 시각·시간 표기
     chime.ts              새 한마디 알림음 (아주 작은 두 음)
+    push.ts               🔔 백그라운드 알림 등록(권한·구독·서버 등록·자동 회복)
+    deeplink.ts           알림을 눌러 열 때의 날짜 링크(#date=2026-11-25&note=…) 해석
     study-context.tsx     React 상태/액션 훅 (낙관적 반영 + 실시간 병합 + 복사)
     theme.ts, cx.ts       색상 테마·className 유틸
-supabase/schema.sql       테이블 + RLS + study_* RPC + Realtime + 가족/이번 주 시드
-scripts/gen-setup.mjs     schema.sql → public/setup.html (SQL 복사 버튼 페이지)
+supabase/schema.sql       테이블 + RLS + study_* RPC + Realtime + 가족/이번 주 시드 + 🔔 알림 트리거
+supabase/functions/send-note-push/
+  index.ts                🔔 Edge Function — 새 한마디를 가족 폰으로 push (DB·구독·발송)
+  webpush.ts              RFC 8291(aes128gcm) 암호화 + RFC 8292(VAPID) 서명 — WebCrypto 만 사용
+scripts/gen-setup.mjs     schema.sql·함수 → public/setup.html (SQL·함수 코드 복사 버튼 페이지)
+scripts/test-webpush.mjs  암호화 라운드트립·VAPID 검증 (npm run test:push)
 scripts/make-icons.py     홈 화면 아이콘 생성 — 둥근 모서리 안쪽 크롭(흰 모서리 없음) · maskable 여백 12%
 scripts/verify-sync.py    동기화 전/후 화면 자동 검증
 scripts/verify-live-sync.py  라이브 사이트에서 두 사람 시점 실시간 검증(테스트 항목 자동 정리)
@@ -238,7 +300,7 @@ scripts/verify-day-split.py  날짜 요약 완료율이 아이별로 나뉘는�
 scripts/verify-note-alert.py  💬 새 한마디 알림 경로 검증 — 서비스 워커 알림·진동·배너 닫기(데모 빌드)
 scripts/verify-live-note-dates.py  라이브 사이트에서 💬 한마디가 날짜마다 따로 보이는지 · 배너 닫기 검증
 public/manifest.json      PWA 매니페스트
-public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백)
+public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백·🔔 push 알림·알림 클릭 딥링크)
 public/icons/             앱 아이콘(192/512/maskable/apple)
 ```
 
@@ -256,6 +318,26 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **🔔 백그라운드 알림(Web Push) 구조 · 코드 · 검사** (2026-11-25)
+  - 암호화: `npm run test:push` (17개 통과) — '폰'이 만든 구독 키로 암호문을 실제로 복호화해 원문 일치 확인
+    - 한국어 JSON 라운드트립 · 매번 다른 salt/일회용 키 · 다른 기기 키로는 안 열림 · 한글 300자(1,003바이트) 한 레코드
+    - VAPID JWT: ES256 서명을 공개키로 검증 · `aud`=push 서비스 origin · `exp` 12시간(Apple 24시간 제한 이내) · 변조 서명 거부
+  - DB: `node .tmp/pgtest/test-push-sql.mjs` (PGlite, 31개 통과) — `net.http_post` 스텁으로 트리거 호출까지 확인
+    - SQL 1회·2회 실행 모두 안전(훅 비밀값·구독 유지) · `family_notes.push_sent_at` 추가 · 트리거 URL/헤더(note_id·x-study-hook)
+    - 함수 호출이 실패해도 한마디 저장은 성공 · anon 은 `push_config` 공개키 한 줄만/`push_subscriptions` 접근 불가
+    - `study_register_push` 업서트·actor 검증(42501)·빈 주소(22023)·120일 정리 · 다른 가족 구독 삭제 불가
+  - 함수: `node .tmp/pgtest/test-push-function.mjs` (26개 통과) — DB·push 서비스를 가짜로 두고 실제 요청 검사
+    - `action=config` VAPID 키 자동 생성(두 번째 호출은 같은 키) · 훅 없음/틀림 403
+    - 글쓴이(아빠) 기기 제외 2대 발송 · 410 기기 삭제 · `push_sent_at` 기록 · 같은 글 재호출은 `already-sent` · 15분 지난 글 `stale`
+    - 폰이 복호화한 알림: 제목 `💬 우리 가족 한마디` · `아빠: …` · 날짜 `2026-11-25` · 링크 `#date=2026-11-25&note=…`
+    - 날짜 계산: id 의 날짜 우선 · 없으면 KST(UTC 15:30 → 다음 날, 14:59 → 같은 날)
+  - 서비스 워커: `node .tmp/pgtest/test-sw.mjs` (15개 통과) — `self` 를 흉내 내 push/클릭 처리 검사
+    - push → 제목·본문·tag·아이콘(절대 주소)·진동·한국어 · JSON 이 아니어도 뜸
+    - 클릭 → **알림 즉시 닫기** + 열린 앱 창 포커스하며 `{type:'study-note-open', date}` 전달 / 창이 없으면 그 날짜 URL 로 열기
+  - 로컬 빌드 화면: `python3 .tmp/pgtest/verify_deeplink.py` — `#date=2026-11-27` 로 열면 알림판이 그 날짜(`11/27 (금)`)
+    - 서비스 워커 등록(`sw.js`)·셸 캐시 `study-check-shell-v3` · 딥링크 없으면 오늘 · 알림 권한 허용 기기는 자동 등록 시도에도 오류 0
+  - 아직 라이브 검증 전: Supabase 에 SQL·함수를 올린 뒤 실제 폰(안드로이드 크롬·아이폰 홈 화면)에서 확인해야 합니다.
 
 - **아이별 완료율 카드 · 홈 화면 아이콘 교체** (2026-11-25)
   - `python3 scripts/verify-day-split.py` — 390×844 헤드리스 Chrome(데모 빌드) 29개 검사 전부 통과

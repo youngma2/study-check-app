@@ -12,6 +12,7 @@ import { CopyIcon, LockIcon, PlusIcon, UndoIcon, XIcon } from './components/icon
 import { playNoteChime } from './lib/chime';
 import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { defaultItemsForDay } from './lib/defaults';
+import { deepLinkDate } from './lib/deeplink';
 import { formatNoteTime, noteDate } from './lib/notes';
 import { summarize } from './lib/store';
 import { useStudy, type ActionResult } from './lib/study-context';
@@ -52,10 +53,14 @@ export default function App() {
     markNotesSeen,
     addNote,
     deleteNote,
+    enablePush,
   } = study;
 
-  const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date()));
-  const [selectedDate, setSelectedDate] = useState<string>(() => todayISO());
+  // 알림을 눌러 열었으면 그 한마디가 붙은 날짜로 바로 시작합니다.
+  const [weekStart, setWeekStart] = useState<Date>(() =>
+    startOfWeek(fromISODate(deepLinkDate() ?? todayISO())),
+  );
+  const [selectedDate, setSelectedDate] = useState<string>(() => deepLinkDate() ?? todayISO());
   const [profileOpen, setProfileOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -155,16 +160,44 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [latestUnseen, latestUnseenAuthor, notifyPermission]);
 
-  /** 브라우저 알림 권한 요청 (버튼을 누를 때만) */
+  /**
+   * '🔔 알림 켜기' — 브라우저 알림 권한을 받고, 이 기기를 백그라운드 알림에 등록합니다.
+   * 앱을 완전히 닫아 둬도 새 한마디가 폰 알림으로 오게 됩니다.
+   */
   const requestNotifyPermission = async () => {
     if (typeof window === 'undefined' || !('Notification' in window)) return;
     try {
-      const result = await Notification.requestPermission();
-      setNotifyPermission(result);
+      const result = await enablePush();
+      setNotifyPermission(Notification.permission);
+      if (result.ok) {
+        notify('알림을 켰어요. 앱을 닫아 둬도 새 한마디가 폰 알림으로 와요.');
+      } else if (Notification.permission !== 'granted') {
+        notify(result.error ?? '알림을 켜지 못했어요.');
+      } else {
+        notify(result.error ?? '폰 알림은 아직 준비 중이에요.');
+      }
     } catch {
       /* 권한 창을 띄울 수 없는 환경 */
     }
   };
+
+  /** 폰 알림을 눌러 앱이 열리면 그 날짜 알림판으로 이동합니다(이미 열려 있을 때). */
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; date?: string } | null;
+      if (!data || data.type !== 'study-note-open') return;
+      const day = data.date && /^\d{4}-\d{2}-\d{2}$/.test(data.date) ? data.date : null;
+      if (day) {
+        setSelectedDate(day);
+        setWeekStart(startOfWeek(fromISODate(day)));
+      }
+      markNotesSeen();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [markNotesSeen]);
 
   /** 부모는 아이들 전체를, 아이는 자기 것만 봅니다. */
   const visibleMembers = useMemo(

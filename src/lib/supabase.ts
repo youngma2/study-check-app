@@ -50,6 +50,12 @@ function toUserError(error: unknown): Error {
   return new Error(messageOf(error));
 }
 
+/** 서비스 워커에 넘길 공개 값(publishable 키 — 브라우저 번들에 이미 들어 있는 값입니다). */
+export function supabasePublicConfig(): { url: string; anonKey: string } | null {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  return { url: SUPABASE_URL, anonKey: SUPABASE_ANON_KEY };
+}
+
 export function createSupabaseAdapter(): SupabaseStorageAdapter | null {
   if (!isSupabaseConfigured()) return null;
   const client = createClient(SUPABASE_URL as string, SUPABASE_ANON_KEY as string, {
@@ -86,6 +92,7 @@ interface FamilyNoteRow {
   author_id: string;
   content: string;
   created_at: string;
+  push_sent_at?: string | null;
 }
 
 interface TaskRow {
@@ -327,6 +334,74 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return () => {
       void this.client.removeChannel(channel);
     };
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 🔔 백그라운드 알림 (Web Push)                                       */
+  /* ---------------------------------------------------------------- */
+
+  /** 앱이 읽는 알림 설정은 VAPID 공개키 한 줄뿐입니다(RLS 정책도 그 한 줄만 엽니다). */
+  async loadPushPublicKey(): Promise<string | null> {
+    const res = await this.client
+      .from('push_config')
+      .select('value')
+      .eq('key', 'vapid_public_key')
+      .limit(1);
+    if (res.error) return null;
+    const row = ((res.data ?? []) as Array<{ value: string }>)[0];
+    return row?.value ?? null;
+  }
+
+  /**
+   * 공개키가 없으면 알림 함수를 한 번 불러 키를 만들게 합니다.
+   * (함수가 아직 배포 전이면 null — 앱은 '알림 준비 전'으로 조용히 넘어갑니다)
+   */
+  async ensurePushPublicKey(): Promise<string | null> {
+    const stored = await this.loadPushPublicKey();
+    if (stored) return stored;
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/send-note-push`, {
+        method: 'POST',
+        headers: { apikey: SUPABASE_ANON_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'config' }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { publicKey?: unknown };
+        if (typeof data?.publicKey === 'string' && data.publicKey) return data.publicKey;
+      }
+    } catch {
+      /* 함수 배포 전·오프라인 */
+    }
+    return this.loadPushPublicKey();
+  }
+
+  /** 이 기기를 알림 대상으로 등록합니다(같은 주소면 갱신). */
+  async registerPushDevice(
+    actorId: string,
+    endpoint: string,
+    p256dh: string,
+    auth: string,
+    userAgent?: string,
+  ): Promise<void> {
+    const { error } = await this.client.rpc('study_register_push', {
+      p_actor_id: actorId,
+      p_endpoint: endpoint,
+      p_p256dh: p256dh,
+      p_auth: auth,
+      p_user_agent: userAgent ?? null,
+    });
+    if (error) throw toUserError(error);
+  }
+
+  /** 이 기기를 알림 대상에서 뺍니다. */
+  async removePushDevice(actorId: string, endpoint: string): Promise<void> {
+    const { error } = await this.client.rpc('study_delete_push', {
+      p_actor_id: actorId,
+      p_endpoint: endpoint,
+    });
+    if (error) throw toUserError(error);
   }
 
   /** 부모 관리 PIN 확인 — 서버(family_secrets 의 bcrypt 해시)에서만 판단합니다. */
