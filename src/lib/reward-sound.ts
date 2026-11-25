@@ -9,15 +9,26 @@
 
 const SOUND_KEY = 'study-check.reward-sound.v1';
 
+let soundKey = SOUND_KEY;
 let audio: AudioContext | null = null;
 let muted = false;
 let loaded = false;
+
+/**
+ * 효과음 설정을 저장할 키를 바꿉니다.
+ * 체험 페이지(demo.html)는 이 기기의 실제 앱 설정과 섞이지 않도록 자기 키를 씁니다.
+ */
+export function setRewardSoundStorageKey(key: string): void {
+  soundKey = key;
+  loaded = false;
+  muted = false;
+}
 
 function loadPreference(): void {
   if (loaded || typeof window === 'undefined') return;
   loaded = true;
   try {
-    muted = window.localStorage.getItem(SOUND_KEY) === 'off';
+    muted = window.localStorage.getItem(soundKey) === 'off';
   } catch {
     muted = false;
   }
@@ -33,7 +44,7 @@ export function setRewardSoundOn(on: boolean): void {
   muted = !on;
   if (!on) stopAll();
   try {
-    window.localStorage.setItem(SOUND_KEY, on ? 'on' : 'off');
+    window.localStorage.setItem(soundKey, on ? 'on' : 'off');
   } catch {
     /* 기억하지 못해도 이번 화면에서는 그대로 */
   }

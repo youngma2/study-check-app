@@ -20,6 +20,18 @@ npm run build    # 타입 검사 + 프로덕션 빌드 (dist/)
 npm run preview  # 빌드 결과 미리보기 (http://127.0.0.1:4174)
 ```
 
+### 🧪 뽑기 상자 체험 페이지 (demo.html)
+
+폰에서 **3택1 뽑기 상자**를 바로 눌러 보는 체험 페이지입니다. **실제 가족 DB·기기 저장을 쓰지 않습니다.**
+
+- 라이브: **https://youngma2.github.io/study-check-app/demo.html**
+- 로컬: `npm run build` → `http://127.0.0.1:4174/study-check-app/demo.html` (preview) · `npm run dev` → `http://127.0.0.1:5174/demo.html`
+- 접속하면 3택1 팝업이 **자동으로 한 번** 열리고, 닫은 뒤 **🎁 다시 뽑아보기** 로 몇 번이고 다시 해볼 수 있습니다.
+  뽑은 기록(최근 5개)은 화면에만 남습니다.
+- 상단에 `🧪 체험용 데모 모드 · 실제 가족 기록에는 저장되지 않습니다` 배너가 늘 보입니다.
+- 실제 앱의 `RewardGiftModal` 을 그대로 쓰되, Supabase RPC(`study_open_reward` 등)·실제 DB·localStorage 로 가는 요청은 **없습니다**
+  (`src/lib/demo-context.tsx` 의 화면 안 상태만 사용 · 🔊/🔇 설정도 `study-check.demo.*` 키로 분리).
+
 > Node 18+ 가 필요합니다. 이 작업 환경에는 Node 가 없어서 `/workspace/.tools/node` 에 20.18.0 을 설치해 두었습니다:
 > `export PATH=/workspace/.tools/node/bin:$PATH`
 
@@ -290,6 +302,7 @@ Supabase 없이 이 기기에만 저장하는 데모 모드에서는 같은 규�
 src/
   App.tsx                 화면 조립, 주간/일자 상태, 토스트
   main.tsx                엔트리 (StudyProvider)
+  demo-main.tsx           🧪 체험 페이지 엔트리 (뽑기 상자만 — 서버 요청·기기 저장 없음)
   index.css               Tailwind + 기본 스타일
   components/
     AppHeader.tsx         로고·가족명·프로필 전환
@@ -306,6 +319,7 @@ src/
     TierBadge.tsx         🏆 티어 엠블럼 SVG (방패·보석·왕관) + 이름 옆 배지
     TierPanel.tsx         🏆 시즌 스트립·상단 시즌 바·🎁 뽑기 상자(3택1 팝업 열기·사용 완료)
     RewardGiftModal.tsx   🎁 3택1 뽑기 팝업 (상자 3개·진동·Web Audio 효과음·폭죽/반짝이 연출)
+    DemoGiftPage.tsx      🧪 demo.html 화면 (체험 배너·다시 뽑아보기·화면에만 남는 기록)
     ParentDashboard.tsx   📊 이번 주 요약 카드 + 주별/월별 상세 대시보드 (부모 전용)
     Sheet.tsx             바텀시트 공통
     icons.tsx             인라인 SVG 아이콘
@@ -325,7 +339,9 @@ src/
     push.ts               🔔 백그라운드 알림 등록(권한·구독·서버 등록·자동 회복)
     deeplink.ts           알림을 눌러 열 때의 날짜 링크(#date=2026-11-25&note=…) 해석
     study-context.tsx     React 상태/액션 훅 (낙관적 반영 + 실시간 병합 + 복사)
+    demo-context.tsx      🧪 체험용 StudyContext (화면 안 상태만 — Supabase·localStorage 없음)
     theme.ts, cx.ts       색상 테마·className 유틸
+demo.html                 🧪 뽑기 상자 체험 페이지 (Vite 멀티페이지 · src/demo-main.tsx)
 supabase/schema.sql       테이블 + RLS + study_* RPC + Realtime + 가족/이번 주 시드 + 🔔 알림 트리거
 supabase/functions/send-note-push/
   index.ts                🔔 Edge Function — 새 한마디를 가족 폰으로 push (DB·구독·발송)
@@ -343,6 +359,7 @@ scripts/verify-live-note-dates.py  라이브 사이트에서 💬 한마디가 �
 scripts/verify-tier-ui.py  🏆 티어·🔥 연속 100%·🎁 3택1 뽑기 팝업(진동·효과음·나머지 상자 공개·기기 저장) 검증(데모 빌드)
 scripts/verify-dashboard.py  📊 부모 요약 카드 → 상세 대시보드(주별/월별·기간 이동·보너스 합산·취합용 복사·아이 화면 미노출) 검증(데모 빌드)
 scripts/verify-live-reward-dashboard.py  라이브 사이트에서 부모 대시보드 · (응답 스텁) 3택1 팝업 · DB 무변경 확인
+scripts/verify-demo-gift.py  🧪 체험 페이지 검증 — 배너·자동 팝업·다시 뽑기·요청 0건·DB 무변경(로컬/라이브)
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백·🔔 push 알림·알림 클릭 딥링크)
 public/icons/             앱 아이콘(192/512/maskable/apple)
@@ -353,6 +370,7 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 정적 호스팅이면 그대로 됩니다. `npm run build` → `dist/` 업로드 (Vercel/Netlify/Cloudflare Pages).
 
 - 라이브: **https://youngma2.github.io/study-check-app/** (GitHub Pages, `gh-pages` 브랜치)
+- 🧪 뽑기 상자 체험(같은 빌드의 두 번째 페이지): **https://youngma2.github.io/study-check-app/demo.html**
 - SQL 복사 페이지: **https://youngma2.github.io/study-check-app/setup.html**
 - 이 저장소용 배포 스크립트: `/workspace/deploy-study-check-app.sh`
   - `dist` 에서 **`sb_secret_` / service_role JWT** 만 검사해 막고, 공개용 `sb_publishable_` 키는 통과시킵니다.

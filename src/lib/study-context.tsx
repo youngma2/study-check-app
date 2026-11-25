@@ -136,7 +136,8 @@ export interface StudyContextValue {
   resetDemo: () => Promise<ActionResult>;
 }
 
-const StudyContext = createContext<StudyContextValue | null>(null);
+/** 체험 데모(demo.html)도 같은 팝업을 쓰도록 열어 둡니다 — 실제 앱은 아래 StudyProvider 만 씁니다. */
+export const StudyContext = createContext<StudyContextValue | null>(null);
 
 function resolveInitialMemberId(db: StudyDB): string {
   const fromHash =
