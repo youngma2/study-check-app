@@ -121,6 +121,9 @@ export default function App() {
       const title = '💬 우리 가족 한마디';
       const options: NotificationOptions = {
         body: `${latestUnseenAuthor?.name ?? '가족'}: ${latestUnseen.content}`,
+        // 앱을 보고 있을 때 뜨는 알림도 같은 앱 아이콘·상단 바 배지를 씁니다(서비스 워커 알림과 동일).
+        icon: `${import.meta.env.BASE_URL}icons/icon-192.png?v=4`,
+        badge: `${import.meta.env.BASE_URL}badge-96.png?v=4`,
         tag: `study-note-${latestUnseen.id}`,
       };
       try {

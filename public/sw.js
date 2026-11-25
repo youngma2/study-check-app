@@ -2,15 +2,21 @@
    네트워크 우선(network-first): 새 배포가 있으면 바로 반영되고,
    네트워크가 실패하거나 오프라인일 때만 캐시된 앱 셸을 씁니다.
    🔔 앱을 닫아 둬도 오는 백그라운드 알림(push)도 여기서 받습니다. */
-const CACHE_NAME = 'study-check-shell-v5';
+const CACHE_NAME = 'study-check-shell-v6';
 const SCOPE = new URL('./', self.location.href);
+/* 알림 아이콘 — 설치·알림 모두 여기 경로를 씁니다.
+   icon: 앱 아이콘(알림 카드 오른쪽 큰 그림)
+   badge: 안드로이드 상단 바용 흰색 실루엣(투명 배경 + 흰색) — 작게 줄여도 뭉개지지 않게 도형으로 그린 파일 */
+const NOTIFICATION_ICON = 'icons/icon-192.png';
+const NOTIFICATION_BADGE = 'badge-96.png';
 const SHELL = [
   '',
   'manifest.json?v=3',
-  'icons/icon-192.png?v=3',
+  'icons/icon-192.png?v=4',
   'icons/icon-512.png?v=3',
   'icons/icon-maskable-512.png?v=3',
   'icons/apple-touch-icon.png?v=3',
+  'badge-96.png?v=4',
 ];
 
 self.addEventListener('install', (event) => {
@@ -76,6 +82,19 @@ function urlBase64ToUint8Array(base64) {
   return bytes;
 }
 
+/* 서버(push payload)가 아이콘/배지 경로를 보내면 그대로 쓰고, 없거나 비어 있으면
+   앱 기본 아이콘을 씁니다. 상대 경로(./icons/..., badge-96.png 등)도 이 워커의
+   scope 기준으로 풀어 절대 주소로 만듭니다. */
+function notificationAsset(value, fallback) {
+  const path = typeof value === 'string' ? value.trim() : '';
+  if (!path) return new URL(fallback, SCOPE).href;
+  try {
+    return new URL(path, SCOPE).href;
+  } catch {
+    return new URL(fallback, SCOPE).href;
+  }
+}
+
 /** push 서비스가 보낸 알림을 그대로 폰 알림으로 띄웁니다. */
 self.addEventListener('push', (event) => {
   let data = {};
@@ -88,8 +107,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || '💬 우리 가족 한마디';
   const options = {
     body: data.body || '',
-    icon: new URL('icons/icon-192.png', SCOPE).href,
-    badge: new URL('icons/icon-192.png', SCOPE).href,
+    icon: notificationAsset(data.icon, NOTIFICATION_ICON),
+    badge: notificationAsset(data.badge, NOTIFICATION_BADGE),
     tag: data.tag || 'study-note',
     lang: 'ko',
     vibrate: [150, 80, 150],
