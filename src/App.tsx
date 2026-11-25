@@ -5,6 +5,7 @@ import { ChildBoard } from './components/ChildBoard';
 import { CopySheet } from './components/CopySheet';
 import { DayOverview } from './components/DayOverview';
 import { FamilyNotesBoard } from './components/FamilyNotesBoard';
+import { ParentDashboard, ParentWeekSummary } from './components/ParentDashboard';
 import { ParentPinGate } from './components/ParentPinGate';
 import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
@@ -72,6 +73,8 @@ export default function App() {
   const [parentGateReturnTo, setParentGateReturnTo] = useState<string | null>(null);
   /** 어느 부모 화면을 열려는지 (아빠·엄마 행을 누른 경우) */
   const [parentGateTarget, setParentGateTarget] = useState<string | null>(null);
+  /** 📊 부모 전용 상세 대시보드 */
+  const [dashboardOpen, setDashboardOpen] = useState(false);
   const [fillingDefaults, setFillingDefaults] = useState(false);
   const fillingDefaultsRef = useRef(false);
   /** 브라우저 알림 권한 ('unsupported' = 이 브라우저에 알림 기능 없음) */
@@ -551,6 +554,9 @@ export default function App() {
 
         <DayOverview dateIso={selectedDate} summary={daySummary} memberSummaries={dayMemberStats} />
 
+        {/* 📊 엄마·아빠 전용 — 이번 주 간단 요약(누르면 상세 대시보드). 아이 화면에는 없습니다. */}
+        {isParent ? <ParentWeekSummary onOpen={() => setDashboardOpen(true)} /> : null}
+
         {isParent ? (
           <button
             type="button"
@@ -742,6 +748,8 @@ export default function App() {
         syncState={study.syncState}
         realtimeState={study.realtimeState}
       />
+
+      {isParent && dashboardOpen ? <ParentDashboard onClose={() => setDashboardOpen(false)} /> : null}
 
       {toast ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 flex justify-center px-6">

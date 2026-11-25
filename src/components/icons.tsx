@@ -124,3 +124,21 @@ export function CalendarIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </svg>
+  );
+}
+
+export function BarChartIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M3 21h18" />
+      <path d="M6 21v-6M11 21V9M16 21V5M21 21v-9" />
+    </svg>
+  );
+}

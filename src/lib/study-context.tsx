@@ -60,6 +60,7 @@ import {
   loadLocalRewardSettings,
   loadLocalTierEvents,
   normalizeSettings,
+  rememberRewardOpen,
   saveLocalRewardSettings,
   saveLocalTierEvents,
   sortTierEvents,
@@ -654,19 +655,37 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         current.members.find((item) => item.id === currentMemberIdRef.current) ?? current.members[0];
       if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
 
+      const openedAt = new Date().toISOString();
       applyTierEvents(
-        before.map((event) =>
-          event.id === eventId ? { ...event, opened_at: new Date().toISOString() } : event,
-        ),
+        before.map((event) => (event.id === eventId ? { ...event, opened_at: openedAt } : event)),
       );
 
-      if (modeRef.current !== 'supabase' || !cloud) return { ok: true };
+      if (modeRef.current !== 'supabase' || !cloud) {
+        // 이 기기 기록 — 클라우드가 없어도 '몇 분을 뽑았는지'가 폰에 남습니다.
+        if (target.box_minutes !== null) {
+          rememberRewardOpen({
+            event_id: eventId,
+            member_id: target.member_id,
+            minutes: target.box_minutes,
+            opened_at: openedAt,
+          });
+        }
+        return { ok: true };
+      }
 
       try {
         const saved = await cloud.openReward(actor.id, eventId);
         const next = tierEventsRef.current.map((event) => (event.id === eventId ? saved : event));
         tierEventsRef.current = next;
         setTierEvents(next);
+        if (saved.box_minutes !== null) {
+          rememberRewardOpen({
+            event_id: saved.id,
+            member_id: saved.member_id,
+            minutes: saved.box_minutes,
+            opened_at: saved.opened_at ?? openedAt,
+          });
+        }
         return { ok: true };
       } catch (error) {
         applyTierEvents(before);

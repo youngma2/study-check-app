@@ -46,6 +46,8 @@ export const DEFAULT_REWARD_SETTINGS: RewardSettings = {
 
 export const LOCAL_TIER_EVENTS_KEY = 'study-check.tier-events.v1';
 export const LOCAL_REWARD_SETTINGS_KEY = 'study-check.reward-settings.v1';
+/** 뽑은 기록의 이 기기 사본 — 클라우드 모드에서도 '언제 몇 분을 뽑았는지'가 폰에 남습니다. */
+export const LOCAL_REWARD_OPENS_KEY = 'study-check.reward-opens.v1';
 
 /** 승급 한 칸의 id — 같은 아이·같은 달·같은 칸이면 언제나 같은 값(중복 방지). */
 export function tierEventId(memberId: string, season: string, level: number): string {
@@ -124,6 +126,49 @@ export function loadLocalRewardSettings(): RewardSettings {
     return normalizeSettings(JSON.parse(raw));
   } catch {
     return { ...DEFAULT_REWARD_SETTINGS };
+  }
+}
+
+/** 뽑기 한 번의 기기 기록 — 상자를 열 때마다 한 줄 남깁니다. */
+export interface RewardOpenRecord {
+  event_id: string;
+  member_id: string;
+  minutes: number;
+  opened_at: string;
+}
+
+function isRewardOpenRecord(value: unknown): value is RewardOpenRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<RewardOpenRecord>;
+  return (
+    typeof record.event_id === 'string' &&
+    typeof record.member_id === 'string' &&
+    typeof record.minutes === 'number' &&
+    typeof record.opened_at === 'string'
+  );
+}
+
+export function loadRewardOpens(): RewardOpenRecord[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(LOCAL_REWARD_OPENS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isRewardOpenRecord);
+  } catch {
+    return [];
+  }
+}
+
+/** 같은 상자는 한 줄만 남깁니다(다른 폰에서 열어도, 새로고침해도 늘지 않음). */
+export function rememberRewardOpen(record: RewardOpenRecord): void {
+  if (typeof window === 'undefined') return;
+  const others = loadRewardOpens().filter((item) => item.event_id !== record.event_id);
+  try {
+    window.localStorage.setItem(LOCAL_REWARD_OPENS_KEY, JSON.stringify([...others, record].slice(-400)));
+  } catch {
+    /* 저장 공간이 없어도 화면은 그대로 쓸 수 있게 둡니다. */
   }
 }
 

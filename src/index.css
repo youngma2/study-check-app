@@ -77,3 +77,49 @@ input[type='date']::-webkit-calendar-picker-indicator {
 .animate-sparkle {
   animation: sparkle 0.95s ease-out both;
 }
+
+/* 🎁 3택1 뽑기 상자 팝업 — 창이 톡 나타나고, 당첨되면 한 번 크게 울렁 */
+@keyframes gift-in {
+  0% { transform: scale(0.86) translateY(12px); opacity: 0; }
+  60% { transform: scale(1.03) translateY(0); opacity: 1; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+.animate-gift-in {
+  animation: gift-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+}
+
+@keyframes gift-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.045); }
+  70% { transform: scale(0.995); }
+  100% { transform: scale(1); }
+}
+
+.animate-gift-pop {
+  animation: gift-pop 0.55s ease-out both;
+}
+
+/* 안 고른 상자가 살짝 열릴 때 */
+@keyframes peek {
+  0% { transform: scale(0.8) rotate(-4deg); opacity: 0; }
+  100% { transform: scale(1) rotate(0deg); opacity: 0.8; }
+}
+
+.animate-peek {
+  animation: peek 0.4s ease-out both;
+}
+
+/* 색종이 — 위에서 흩날리며 떨어짐 */
+@keyframes confetti {
+  0% { transform: translateY(-10px) rotate(0deg); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(230px) rotate(420deg); opacity: 0; }
+}
+
+.animate-confetti {
+  animation-name: confetti;
+  animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1);
+  animation-iteration-count: 1;
+  animation-fill-mode: both;
+}

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { cx } from '../lib/cx';
 import { formatShortDate, toISODate } from '../lib/date';
 import type { TierEvent } from '../lib/rewards';
 import { DIVISIONS, levelForXp } from '../lib/season';
 import { useStudy } from '../lib/study-context';
 import type { Member } from '../lib/types';
+import { RewardGiftModal } from './RewardGiftModal';
 import { TIER_LABEL, TierEmblem } from './TierBadge';
 
 /**
@@ -15,6 +16,8 @@ export function TierPanel({ member }: { member: Member }) {
   const study = useStudy();
   const stats = study.seasonStatsFor(member.id);
   const lastSeason = study.lastSeasonFor(member.id);
+  /** 🎁 3택1 팝업 — 지금 열고 있는 상자 */
+  const [gift, setGift] = useState<TierEvent | null>(null);
 
   if (member.role !== 'child' || !stats) return null;
 
@@ -87,7 +90,7 @@ export function TierPanel({ member }: { member: Member }) {
           </div>
           <div className="no-scrollbar mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5">
             {boxes.map((box) => (
-              <RewardBox key={box.id} event={box} />
+              <RewardBox key={box.id} event={box} onOpenGift={() => setGift(box)} />
             ))}
           </div>
         </div>
@@ -96,6 +99,8 @@ export function TierPanel({ member }: { member: Member }) {
           🎁 큰 티어(실버·골드·플래티넘·다이아·마스터)로 올라가면 뽑기 상자가 열려요
         </p>
       )}
+
+      {gift ? <RewardGiftModal event={gift} memberName={member.name} onClose={() => setGift(null)} /> : null}
     </div>
   );
 }
@@ -105,15 +110,18 @@ export function TierPanel({ member }: { member: Member }) {
  */
 export function SeasonBar({ memberId }: { memberId: string }) {
   const study = useStudy();
+  /** 🎁 위쪽 배지를 눌러도 3택1 팝업이 바로 열립니다 */
+  const [gift, setGift] = useState<TierEvent | null>(null);
   const stats = study.seasonStatsFor(memberId);
   if (!stats) return null;
 
   const { level, xp } = stats;
   const span = level.nextXp === null ? 1 : Math.max(level.nextXp - level.minXp, 1);
   const ratio = level.nextXp === null ? 1 : Math.min(1, Math.max(0, (xp - level.minXp) / span));
-  const unopened = study
+  const unopenedEvents = study
     .tierEventsFor(memberId)
-    .filter((event) => event.season === stats.season && event.box_minutes !== null && !event.opened_at).length;
+    .filter((event) => event.season === stats.season && event.box_minutes !== null && !event.opened_at);
+  const unopened = unopenedEvents.length;
 
   return (
     <div data-testid="season-bar" className="mx-auto flex w-full max-w-md items-center gap-1.5 px-4 pb-2">
@@ -138,13 +146,23 @@ export function SeasonBar({ memberId }: { memberId: string }) {
         </span>
       ) : null}
       {unopened > 0 ? (
-        <span
+        <button
+          type="button"
           data-testid="season-bar-box"
-          title="뽑기 상자가 기다려요"
-          className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-extrabold leading-none text-violet-600 ring-1 ring-violet-200/70"
+          onClick={() => setGift(unopenedEvents[0])}
+          title="뽑기 상자가 기다려요 — 눌러서 열기"
+          className="shrink-0 rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-extrabold leading-none text-violet-600 ring-1 ring-violet-200/70 transition active:scale-90"
         >
           🎁 {unopened}
-        </span>
+        </button>
+      ) : null}
+
+      {gift ? (
+        <RewardGiftModal
+          event={gift}
+          memberName={study.members.find((member) => member.id === memberId)?.name ?? ''}
+          onClose={() => setGift(null)}
+        />
       ) : null}
     </div>
   );
@@ -156,36 +174,14 @@ function shortDate(iso: string): string {
   return formatShortDate(toISODate(date)).replace(/\s*\(.\)$/, '');
 }
 
-/** 한 칸 = 승급 한 번. 큰 티어 승급이면 두근거리며 상자가 열립니다. */
-function RewardBox({ event }: { event: TierEvent }) {
+/** 한 칸 = 승급 한 번. 큰 티어 승급이면 🎁 3택1 팝업이 열립니다. */
+function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => void }) {
   const study = useStudy();
-  const [stage, setStage] = useState<'closed' | 'opening' | 'open'>(event.opened_at ? 'open' : 'closed');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const minutes = event.box_minutes ?? 0;
+  const opened = event.opened_at !== null;
   const tierLabel = `${TIER_LABEL[event.tier]}${event.division >= 1 && event.division <= 3 ? ` ${DIVISIONS[event.division]}` : ''}`;
-
-  useEffect(() => {
-    if (event.opened_at) setStage('open');
-  }, [event.opened_at]);
-
-  const open = () => {
-    if (stage !== 'closed' || busy) return;
-    setBusy(true);
-    setError(null);
-    setStage('opening');
-    window.setTimeout(() => {
-      void study.openReward(event.id).then((result) => {
-        setBusy(false);
-        if (!result.ok) {
-          setStage('closed');
-          setError(result.error ?? '상자를 열지 못했어요');
-          return;
-        }
-        setStage('open');
-      });
-    }, 680);
-  };
 
   const markUsed = async () => {
     if (busy) return;
@@ -201,7 +197,7 @@ function RewardBox({ event }: { event: TierEvent }) {
       data-testid={`reward-box-${event.id}`}
       className={cx(
         'relative w-[100px] shrink-0 overflow-hidden rounded-xl px-2 py-1.5 text-center ring-1 transition',
-        stage === 'open'
+        opened
           ? 'bg-gradient-to-b from-amber-50 to-white ring-amber-200/80'
           : 'bg-gradient-to-b from-violet-50 to-white ring-violet-200/70',
       )}
@@ -210,7 +206,7 @@ function RewardBox({ event }: { event: TierEvent }) {
         {shortDate(event.created_at)} · {tierLabel}
       </p>
 
-      {stage === 'open' ? (
+      {opened ? (
         <div className="animate-reward-pop">
           <p className="mt-0.5 text-[15px] font-extrabold leading-none text-amber-600">+{minutes}분</p>
           <p className="mt-0.5 text-[8.5px] font-bold text-amber-500/90">게임 시간</p>
@@ -236,23 +232,14 @@ function RewardBox({ event }: { event: TierEvent }) {
         <button
           type="button"
           data-testid={`reward-open-${event.id}`}
-          onClick={open}
-          disabled={stage === 'opening'}
+          onClick={onOpenGift}
           className="mt-0.5 flex w-full flex-col items-center"
-          aria-label={`${tierLabel} 승급 뽑기 상자 열기`}
+          aria-label={`${tierLabel} 승급 뽑기 상자 열기 — 상자 3개 중 고르기`}
         >
-          <span className={cx('text-[22px] leading-none', stage === 'opening' ? 'animate-box-shake' : 'animate-box-idle')} aria-hidden>
+          <span className="animate-box-idle text-[22px] leading-none" aria-hidden>
             🎁
           </span>
-          <span className="mt-0.5 text-[8.5px] font-extrabold text-violet-500">
-            {stage === 'opening' ? '두근두근…' : '눌러서 열기'}
-          </span>
-          {stage === 'opening' ? (
-            <span aria-hidden className="pointer-events-none absolute inset-0 grid place-items-center">
-              <span className="animate-sparkle absolute text-[13px]">✨</span>
-              <span className="animate-sparkle absolute text-[11px] [animation-delay:120ms]">✨</span>
-            </span>
-          ) : null}
+          <span className="mt-0.5 text-[8.5px] font-extrabold text-violet-500">눌러서 열기</span>
         </button>
       )}
 

@@ -2,7 +2,7 @@
    네트워크 우선(network-first): 새 배포가 있으면 바로 반영되고,
    네트워크가 실패하거나 오프라인일 때만 캐시된 앱 셸을 씁니다.
    🔔 앱을 닫아 둬도 오는 백그라운드 알림(push)도 여기서 받습니다. */
-const CACHE_NAME = 'study-check-shell-v4';
+const CACHE_NAME = 'study-check-shell-v5';
 const SCOPE = new URL('./', self.location.href);
 const SHELL = [
   '',

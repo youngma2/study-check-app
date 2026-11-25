@@ -22,3 +22,27 @@ export function vibrateKey(): void {
 export function vibrateError(): void {
   vibrate([30, 50, 30]);
 }
+
+/* ------------------------------------------------------------------ */
+/* 🎁 뽑기 상자                                                        */
+/* ------------------------------------------------------------------ */
+
+/** 상자를 손끝으로 골랐을 때 — 톡. */
+export function vibrateRewardPick(): void {
+  vibrate(15);
+}
+
+/** 개봉 직전 두근두근 — 짧게 몰아치는 박자. */
+export function vibrateRewardOpening(): void {
+  vibrate([20, 40, 20, 40, 50]);
+}
+
+/** 당첨 — 손이 짜릿한 세 번. */
+export function vibrateRewardWin(): void {
+  vibrate([40, 30, 80]);
+}
+
+/** 안 고른 상자를 살짝 보여 줄 때의 아주 작은 톡. */
+export function vibrateRewardPeek(): void {
+  vibrate(10);
+}

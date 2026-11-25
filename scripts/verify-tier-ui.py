@@ -121,6 +121,39 @@ def build_db() -> dict:
     }
 
 
+
+SPY = """
+window.__vibrateCalls = [];
+try {
+  Object.defineProperty(navigator, 'vibrate', {
+    configurable: true,
+    value: function (pattern) { window.__vibrateCalls.push(pattern); return true; },
+  });
+} catch (e) { /* 진동을 못 바꾸는 브라우저 */ }
+window.__audioStarts = 0;
+(function () {
+  class Param {
+    setValueAtTime() { return this; }
+    exponentialRampToValueAtTime() { return this; }
+    linearRampToValueAtTime() { return this; }
+  }
+  class Node {
+    constructor() { this.gain = new Param(); this.frequency = new Param(); this.type = 'sine'; }
+    connect() { return this; }
+    start() { window.__audioStarts += 1; }
+    stop() {}
+  }
+  class FakeContext {
+    constructor() { this.state = 'running'; this.currentTime = 0; this.destination = {}; }
+    createOscillator() { return new Node(); }
+    createGain() { return new Node(); }
+    resume() { return Promise.resolve(); }
+  }
+  window.AudioContext = FakeContext;
+  window.webkitAudioContext = FakeContext;
+})();
+"""
+
 SEED = json.dumps(build_db(), ensure_ascii=False)
 INIT = f"""
 window.localStorage.setItem('study-check.db.v1', {json.dumps(SEED)});
@@ -141,6 +174,7 @@ def run() -> int:
 
             # ---------------------------------------------------- 1) 예원(아이) 화면
             child = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
+            child.add_init_script(SPY)
             child.add_init_script(INIT)
             page = child.new_page()
             page.goto(f'{BASE}#as=mem_yewon', wait_until='networkidle')
@@ -193,13 +227,69 @@ def run() -> int:
             page.screenshot(path=str(DOWNLOADS / 'study_tier_child.png'), full_page=False)
             panel.screenshot(path=str(DOWNLOADS / 'study_tier_panel.png'))
 
-            # 상자 열기 — 두근거리는 연출 뒤 보상이 나온다
-            open_button = page.locator('[data-testid^="reward-open-"]').first
-            open_button.click()
-            page.wait_for_selector('[data-testid^="reward-box-"]:has-text("게임 시간")', timeout=5000)
+            # 🎁 3택1 — 누르면 화면 가운데 팝업이 뜨고, 상자 3개 중 하나를 고른다
+            page.locator('[data-testid^="reward-open-"]').first.click()
+            page.wait_for_selector('[data-testid="reward-modal"]', timeout=6000)
+            check('🎁 눌러서 열기 → 화면 가운데 개별 팝업이 열린다', page.locator('[data-testid="reward-modal"]').count() == 1)
+            gifts = page.locator('[data-testid^="reward-gift-"]')
+            check('팝업 안에 상자 3개가 나란히', gifts.count() == 3, str(gifts.count()))
+            check(
+                '고르기 전에는 당첨 숫자가 숨겨져 있다',
+                page.locator('[data-testid="reward-win-minutes"]').count() == 0,
+            )
+            page.screenshot(path=str(DOWNLOADS / 'study_gift_choose.png'))
+
+            gifts.nth(1).click()
+            page.wait_for_selector('[data-testid="reward-opening"]', timeout=3000)
+            check('고르면 흔들리며 여는 중', page.locator('[data-testid="reward-opening"]').count() == 1)
+            page.wait_for_selector('[data-testid="reward-result"]', timeout=8000)
+
+            win_text = page.locator('[data-testid="reward-win-minutes"]').inner_text().strip()
+            win_minutes = int(''.join(ch for ch in win_text if ch.isdigit()))
+            check('고른 상자의 당첨 게임 시간이 크게 뜬다', win_minutes in (5, 10, 15, 20), win_text)
+            others_text = page.locator('[data-testid="reward-others"]').inner_text().strip()
+            check(
+                '나머지 두 상자도 살짝 열려 값이 보인다',
+                others_text.startswith('다른 상자엔') and others_text.count('+') == 2,
+                others_text,
+            )
+            check(
+                '안 고른 상자 2개에 다른 숫자가 보인다',
+                page.locator('[data-testid="reward-gift-0"]').inner_text().count('+') >= 1
+                and page.locator('[data-testid="reward-gift-2"]').inner_text().count('+') >= 1,
+            )
+
+            calls = page.evaluate("() => window.__vibrateCalls || []")
+            check('진동: 고를 때 톡(15)', 15 in calls, str(calls))
+            check('진동: 여는 동안 두근두근([20,40,20,40,50])', [20, 40, 20, 40, 50] in calls, str(calls))
+            check('진동: 당첨([40,30,80])', [40, 30, 80] in calls, str(calls))
+            check(
+                '진동 순서: 톡 → 두근두근 → 당첨',
+                calls.index(15) < calls.index([20, 40, 20, 40, 50]) < calls.index([40, 30, 80]),
+                str(calls),
+            )
+            starts = page.evaluate("() => window.__audioStarts || 0")
+            check('효과음: Web Audio 로 소리를 만든다(mp3 없음)', starts > 0, str(starts))
+
+            page.screenshot(path=str(DOWNLOADS / 'study_gift_result.png'))
+            check('아이 화면 팝업에는 사용 완료 버튼이 없다', page.locator('[data-testid="reward-modal-use"]').count() == 0)
+
+            page.locator('[data-testid="reward-modal-done"]').click()
+            page.wait_for_timeout(400)
+            check('팝업을 닫으면 사라진다', page.locator('[data-testid="reward-modal"]').count() == 0)
             box_text = page.locator('[data-testid^="reward-box-"]').first.inner_text()
-            check('상자를 열면 게임 시간 보상이 나온다 (+5·10·15·20분)', '분' in box_text and '게임 시간' in box_text, box_text.replace('\n', ' / '))
-            check('아이 화면에는 사용 완료 버튼이 없다', page.locator('[data-testid^="reward-use-"]').count() == 0)
+            check(
+                '카드 상자에 당첨 값이 남는다',
+                f'+{win_minutes}분' in box_text and '게임 시간' in box_text,
+                box_text.replace('\n', ' / '),
+            )
+
+            stored = page.evaluate("() => JSON.parse(localStorage.getItem('study-check.reward-opens.v1') || '[]')")
+            check(
+                '뽑은 값이 localStorage 에도 저장된다',
+                len(stored) == 1 and stored[0]['minutes'] == win_minutes and stored[0]['member_id'] == 'mem_yewon',
+                str(stored),
+            )
 
             page.screenshot(path=str(DOWNLOADS / 'study_tier_box_opened.png'), full_page=False)
 
@@ -216,6 +306,7 @@ def run() -> int:
 
             # ---------------------------------------------------- 2) 부모 화면 (PIN)
             parent = browser.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2)
+            parent.add_init_script(SPY)
             parent.add_init_script(INIT)
             ppage = parent.new_page()
             ppage.goto(f'{BASE}#as=mem_dad', wait_until='networkidle')
@@ -250,18 +341,24 @@ def run() -> int:
 
             ppage.screenshot(path=str(DOWNLOADS / 'study_tier_parent.png'))
 
-            # 부모 폰에서 상자를 열면 그 자리에서 '사용 완료' 처리까지 할 수 있습니다
+            # 부모 폰에서도 같은 3택1 팝업 → 당첨 뒤 그 자리에서 '사용 완료'까지
             ppage.locator('[data-testid^="reward-open-"]').first.click()
-            ppage.wait_for_selector('[data-testid^="reward-use-"]', timeout=6000)
-            use_buttons = ppage.locator('[data-testid^="reward-use-"]')
-            check('상자를 연 뒤 부모에게 사용 완료 버튼이 보인다', use_buttons.count() >= 1, str(use_buttons.count()))
-            page_shot = DOWNLOADS / 'study_tier_parent.png'
-            ppage.screenshot(path=str(page_shot))
+            ppage.wait_for_selector('[data-testid="reward-modal"]', timeout=6000)
+            ppage.locator('[data-testid^="reward-gift-"]').first.click()
+            ppage.wait_for_selector('[data-testid="reward-modal-use"]', timeout=8000)
+            check('부모 팝업에서도 3택1 → 사용 완료 버튼', ppage.locator('[data-testid="reward-modal-use"]').count() == 1)
+            ppage.screenshot(path=str(DOWNLOADS / 'study_gift_parent.png'))
 
-            use_buttons.first.click()
+            ppage.locator('[data-testid="reward-modal-use"]').click()
             ppage.wait_for_timeout(700)
             check(
-                '사용 완료를 누르면 배지가 바뀐다',
+                '사용 완료를 누르면 팝업에 표시된다',
+                '사용 완료' in ppage.locator('[data-testid="reward-result"]').inner_text(),
+            )
+            ppage.locator('[data-testid="reward-modal-done"]').click()
+            ppage.wait_for_timeout(400)
+            check(
+                '닫으면 카드 배지가 사용 완료로 바뀐다',
                 '사용 완료' in ppage.locator('[data-testid^="reward-box-"]').first.inner_text(),
             )
             ppage.screenshot(path=str(DOWNLOADS / 'study_tier_reward_used.png'))
