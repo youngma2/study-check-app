@@ -76,7 +76,7 @@ def member_rows():
         {"id": "mem_mom", "family_id": "fam_our_home", "name": "엄마", "role": "parent", "grade": None,
          "emoji": "👩🏻", "color": "violet", "presets": [], "created_at": "2026-11-20T00:01:00+00:00"},
         {"id": "mem_child1", "family_id": "fam_our_home", "name": "첫째", "role": "child", "grade": "중1",
-         "emoji": "🌸", "color": "rose", "presets": [{"title": "스픽 10분 말하기", "subject": "english"}],
+         "emoji": "🌸", "color": "rose", "presets": [{"title": "스픽 30분", "subject": "english"}],
          "created_at": "2026-11-20T00:02:00+00:00"},
         {"id": "mem_child2", "family_id": "fam_our_home", "name": "둘째", "role": "child", "grade": "초4",
          "emoji": "⚡", "color": "amber", "presets": [],
@@ -94,11 +94,11 @@ def task_rows():
         "verified_at": None,
     }
     return [
-        {**base, "id": "t_c1_1", "member_id": "mem_child1", "title": "스픽 10분 말하기", "subject": "english",
+        {**base, "id": "t_c1_1", "member_id": "mem_child1", "title": "스픽 30분", "subject": "english",
          "due_date": TODAY, "status": "todo"},
-        {**base, "id": "t_c1_2", "member_id": "mem_child1", "title": "수학 문제집 2쪽", "subject": "math",
+        {**base, "id": "t_c1_2", "member_id": "mem_child1", "title": "문제집과 오답 노트", "subject": "math",
          "due_date": TODAY, "status": "pending_verification", "created_at": f"{TODAY}T08:02:00+00:00"},
-        {**base, "id": "t_c2_1", "member_id": "mem_child2", "title": "책 읽기 20분", "subject": "reading",
+        {**base, "id": "t_c2_1", "member_id": "mem_child2", "title": "책 읽기 30분", "subject": "reading",
          "due_date": TODAY, "status": "todo", "created_by": "mem_child2", "created_at": f"{TODAY}T08:03:00+00:00"},
         {**base, "id": "t_c1_9", "member_id": "mem_child1", "title": "구름 숙제", "subject": "etc",
          "due_date": TODAY, "status": "todo", "created_at": f"{TODAY}T08:04:00+00:00"},
@@ -232,7 +232,7 @@ def main() -> int:
             body = page.inner_text('body')
             check('앱이 뜨고 가족명 표시', '우리 가족 공부방' in body)
             check('안내 문구 표시', '가족 동기화 준비 중' in body)
-            check('샘플 숙제 표시(폴백)', '스픽 10분 말하기' in body and '책 읽기 20분' in body)
+            check('샘플 숙제 표시(폴백)', '스픽 30분' in body and '책 읽기 30분' in body)
             check('자바스크립트 오류 없음', not errors, '; '.join(errors[:3]))
             print('   (HTTP 4xx: ' + ', '.join(sorted(set(bad))[:3]) + ')')
 
@@ -266,7 +266,7 @@ def main() -> int:
             page2.goto(base + '#as=mem_mom', wait_until='networkidle')
             page2.wait_for_timeout(1200)
             body2 = page2.inner_text('body')
-            check('클라우드 숙제 표시', '스픽 10분 말하기' in body2 and '수학 문제집 2쪽' in body2)
+            check('클라우드 숙제 표시', '스픽 30분' in body2 and '문제집과 오답 노트' in body2)
             check('엄마 시점', '엄마' in body2)
             open_profile(page2)
             sheet = page2.inner_text('body')

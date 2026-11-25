@@ -169,7 +169,7 @@ def main() -> int:
             goto_day(page, friday)
             page.click('[data-testid="open-add"]')
             page.wait_for_selector('[data-testid="save-task"]')
-            page.fill('[role="dialog"] input[placeholder="예) 수학 문제집 2쪽 풀기"]', '샘플 상담 (오후 6시 30분)')
+            page.fill('[role="dialog"] input[placeholder="예) 문제집과 오답 노트"]', '샘플 상담 (오후 6시 30분)')
             page.click('[data-testid="save-task"]')
             page.wait_for_selector('text=공부 항목을 추가했어요', timeout=8000)
             check('준비: 금요일에 격주 상담 항목을 하나 넣었다', '상담' in page.inner_text('main'))
@@ -198,28 +198,28 @@ def main() -> int:
             check('기본 목록: 빈 날은 0개에서 시작', page.locator('[data-testid="task-card"]').count() == 0, str(next_monday))
 
             page.click('[data-testid="fill-defaults"]')
-            page.wait_for_selector('text=기본 목록 7개를 추가했어요', timeout=8000)
+            page.wait_for_selector('text=기본 목록 10개를 추가했어요', timeout=8000)
             added = page.locator('[data-testid="task-card"]').count()
-            check('기본 목록: 한 번 눌러 7개(첫째 3 · 둘째 4)가 들어간다', added == 7, f'{added}개')
+            check('기본 목록: 한 번 눌러 10개(첫째 4 · 둘째 6)가 들어간다', added == 10, f'{added}개')
             check(
                 '기본 목록: 들어간 항목은 할 일 상태(날짜 전이라 완료는 잠김)',
-                page.locator('[data-testid="complete-task"]').count() + page.locator('[data-testid="complete-locked"]').count() == 7
-                and page.locator('[data-testid="complete-locked"]').count() == 7,
+                page.locator('[data-testid="complete-task"]').count() + page.locator('[data-testid="complete-locked"]').count() == 10
+                and page.locator('[data-testid="complete-locked"]').count() == 10,
             )
-            check('기본 목록: 금요일(월·수·금 패턴)에 하던 항목을 가져온다', '받아쓰기 연습' in page.inner_text('main'))
+            check('기본 목록: 금요일(월·수·금 패턴)에 하던 항목을 가져온다', '영어 단어 5개 외우기' in page.inner_text('main'))
             check('기본 목록: 격주 상담 항목은 넣지 않는다', '상담' not in page.inner_text('main'))
             page.wait_for_timeout(2800)
 
             page.click('[data-testid="fill-defaults"]')
             page.wait_for_selector('text=기본 목록이 이미 다 들어 있어요', timeout=5000)
-            check('기본 목록: 두 번 눌러도 중복으로 늘지 않는다', page.locator('[data-testid="task-card"]').count() == 7)
+            check('기본 목록: 두 번 눌러도 중복으로 늘지 않는다', page.locator('[data-testid="task-card"]').count() == 10)
             page.wait_for_timeout(2800)
 
             # 지난 기록이 아예 없는 날은 그 아이의 빠른 추가 항목(presets)으로 채운다
             goto_day(page, week_start - timedelta(days=7))
             page.click('[data-testid="fill-defaults"]')
-            page.wait_for_selector('text=기본 목록 8개를 추가했어요', timeout=8000)
-            check('기본 목록: 기록이 없으면 프리셋 8개로 채운다', page.locator('[data-testid="task-card"]').count() == 8)
+            page.wait_for_selector('text=기본 목록 12개를 추가했어요', timeout=8000)
+            check('기본 목록: 기록이 없으면 프리셋 12개로 채운다', page.locator('[data-testid="task-card"]').count() == 12)
             page.wait_for_timeout(2800)
 
             # ---------------------------------------------------------------

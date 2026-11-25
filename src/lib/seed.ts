@@ -37,10 +37,12 @@ function members(now: Date): Member[] {
       emoji: '🌸',
       color: 'rose',
       presets: [
-        { title: '스픽 10분 말하기', subject: 'english' },
-        { title: '영어 단어 10개 외우기', subject: 'english' },
-        { title: '받아쓰기 연습', subject: 'korean' },
-        { title: '수학 문제집 2쪽', subject: 'math' },
+        { title: '스픽 30분', subject: 'english' },
+        { title: '타자 연습 20분', subject: 'etc' },
+        { title: '영어 단어 5개 외우기', subject: 'english' },
+        { title: '책 읽기 30분', subject: 'reading' },
+        { title: '문제집과 오답 노트', subject: 'math' },
+        { title: '독서록 (아빠 검사)', subject: 'reading' },
       ],
       created_at: createdAt,
     },
@@ -53,10 +55,12 @@ function members(now: Date): Member[] {
       emoji: '⚡',
       color: 'amber',
       presets: [
-        { title: '온리원 강의 듣기', subject: 'etc' },
-        { title: '스픽 10분 말하기', subject: 'english' },
-        { title: '문제집 2장 풀기', subject: 'math' },
-        { title: '책 읽기 20분', subject: 'reading' },
+        { title: '온리원', subject: 'etc' },
+        { title: '스픽 30분', subject: 'english' },
+        { title: '문제집과 오답 노트', subject: 'math' },
+        { title: '신문 요약', subject: 'korean' },
+        { title: '책 읽기 30분', subject: 'reading' },
+        { title: '타자 연습 20분', subject: 'etc' },
       ],
       created_at: createdAt,
     },
@@ -70,19 +74,23 @@ interface PlanItem {
   days: number[];
 }
 
-/** 샘플 주간 항목: 둘째(온리원·스픽·문제집·책 읽기), 첫째(스픽·영어 단어·받아쓰기·문제집) */
+/** 샘플 주간 항목 — 실제로 쓰는 '기본 목록' 그대로. 첫째(스픽·단어·타자·책·문제집·독서록), 둘째(온리원·스픽·문제집·신문·책·타자) */
 const WEEKLY_PLANS: Record<string, PlanItem[]> = {
   mem_child1: [
-    { title: '스픽 10분 말하기', subject: 'english', days: [0, 1, 2, 3, 4, 5] },
-    { title: '영어 단어 10개 외우기', subject: 'english', days: [0, 1, 2, 3, 4] },
-    { title: '받아쓰기 연습', subject: 'korean', days: [0, 2, 4] },
-    { title: '수학 문제집 2쪽', subject: 'math', days: [1, 3] },
+    { title: '스픽 30분', subject: 'english', days: [0, 1, 2, 3, 4, 5] },
+    { title: '영어 단어 5개 외우기', subject: 'english', days: [0, 1, 2, 3, 4] },
+    { title: '타자 연습 20분', subject: 'etc', days: [0, 1, 2, 3, 4] },
+    { title: '책 읽기 30분', subject: 'reading', days: [0, 1, 2, 3, 4, 5] },
+    { title: '문제집과 오답 노트', subject: 'math', days: [1, 3] },
+    { title: '독서록 (아빠 검사)', subject: 'reading', days: [5] },
   ],
   mem_child2: [
-    { title: '온리원 강의 듣기', subject: 'etc', days: [0, 1, 2, 3, 4] },
-    { title: '스픽 10분 말하기', subject: 'english', days: [0, 1, 2, 3, 4, 5] },
-    { title: '문제집 2장 풀기', subject: 'math', days: [0, 1, 2, 3, 4] },
-    { title: '책 읽기 20분', subject: 'reading', days: [0, 1, 2, 3, 4, 5, 6] },
+    { title: '온리원', subject: 'etc', days: [0, 1, 2, 3, 4] },
+    { title: '스픽 30분', subject: 'english', days: [0, 1, 2, 3, 4, 5] },
+    { title: '문제집과 오답 노트', subject: 'math', days: [0, 1, 2, 3, 4] },
+    { title: '신문 요약', subject: 'korean', days: [0, 2, 4] },
+    { title: '책 읽기 30분', subject: 'reading', days: [0, 1, 2, 3, 4, 5, 6] },
+    { title: '타자 연습 20분', subject: 'etc', days: [0, 1, 2, 3, 4] },
   ],
 };
 

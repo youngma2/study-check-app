@@ -955,30 +955,38 @@ values
   ('mem_dad',    'fam_our_home', '아빠', 'parent', null,  '👨🏻', 'sky',    '[]'::jsonb),
   ('mem_mom',    'fam_our_home', '엄마', 'parent', null,  '👩🏻', 'violet', '[]'::jsonb),
   ('mem_child1', 'fam_our_home', '첫째', 'child',  '중1', '🌸',   'rose',   '[
-     {"title": "스픽 10분 말하기", "subject": "english"},
-     {"title": "영어 단어 10개 외우기", "subject": "english"},
-     {"title": "받아쓰기 연습", "subject": "korean"},
-     {"title": "수학 문제집 2쪽", "subject": "math"}
+     {"title": "스픽 30분", "subject": "english"},
+     {"title": "타자 연습 20분", "subject": "etc"},
+     {"title": "영어 단어 5개 외우기", "subject": "english"},
+     {"title": "책 읽기 30분", "subject": "reading"},
+     {"title": "문제집과 오답 노트", "subject": "math"},
+     {"title": "독서록 (아빠 검사)", "subject": "reading"}
    ]'::jsonb),
   ('mem_child2', 'fam_our_home', '둘째', 'child',  '초4', '⚡',   'amber',  '[
-     {"title": "온리원 강의 듣기", "subject": "etc"},
-     {"title": "스픽 10분 말하기", "subject": "english"},
-     {"title": "문제집 2장 풀기", "subject": "math"},
-     {"title": "책 읽기 20분", "subject": "reading"}
+     {"title": "온리원", "subject": "etc"},
+     {"title": "스픽 30분", "subject": "english"},
+     {"title": "문제집과 오답 노트", "subject": "math"},
+     {"title": "신문 요약", "subject": "korean"},
+     {"title": "책 읽기 30분", "subject": "reading"},
+     {"title": "타자 연습 20분", "subject": "etc"}
    ]'::jsonb)
 on conflict (id) do nothing;
 
 -- 이번 주(월~일) 샘플 숙제. 날짜는 한국 시간 기준 이번 주 월요일부터 채웁니다.
 with plan (member_id, idx, title, subject, days) as (
   values
-    ('mem_child1', 0, '스픽 10분 말하기',   'english', array[0, 1, 2, 3, 4, 5]),
-    ('mem_child1', 1, '영어 단어 10개 외우기', 'english', array[0, 1, 2, 3, 4]),
-    ('mem_child1', 2, '받아쓰기 연습',      'korean',  array[0, 2, 4]),
-    ('mem_child1', 3, '수학 문제집 2쪽',    'math',    array[1, 3]),
-    ('mem_child2', 0, '온리원 강의 듣기',   'etc',     array[0, 1, 2, 3, 4]),
-    ('mem_child2', 1, '스픽 10분 말하기',   'english', array[0, 1, 2, 3, 4, 5]),
-    ('mem_child2', 2, '문제집 2장 풀기',    'math',    array[0, 1, 2, 3, 4]),
-    ('mem_child2', 3, '책 읽기 20분',       'reading', array[0, 1, 2, 3, 4, 5, 6])
+    ('mem_child1', 0, '스픽 30분',          'english', array[0, 1, 2, 3, 4, 5]),
+    ('mem_child1', 1, '영어 단어 5개 외우기',   'english', array[0, 1, 2, 3, 4]),
+    ('mem_child1', 2, '타자 연습 20분',      'etc',     array[0, 1, 2, 3, 4]),
+    ('mem_child1', 3, '책 읽기 30분',        'reading', array[0, 1, 2, 3, 4, 5]),
+    ('mem_child1', 4, '문제집과 오답 노트',   'math',    array[1, 3]),
+    ('mem_child1', 5, '독서록 (아빠 검사)',   'reading', array[5]),
+    ('mem_child2', 0, '온리원',             'etc',     array[0, 1, 2, 3, 4]),
+    ('mem_child2', 1, '스픽 30분',          'english', array[0, 1, 2, 3, 4, 5]),
+    ('mem_child2', 2, '문제집과 오답 노트',   'math',    array[0, 1, 2, 3, 4]),
+    ('mem_child2', 3, '신문 요약',          'korean',  array[0, 2, 4]),
+    ('mem_child2', 4, '책 읽기 30분',        'reading', array[0, 1, 2, 3, 4, 5, 6]),
+    ('mem_child2', 5, '타자 연습 20분',      'etc',     array[0, 1, 2, 3, 4])
 ),
 days as (
   select (date_trunc('week', (now() at time zone 'Asia/Seoul'))::date + g) as day

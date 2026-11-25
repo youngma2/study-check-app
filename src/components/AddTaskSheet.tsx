@@ -163,7 +163,7 @@ export function AddTaskSheet({
               setTitle(event.target.value);
               setError(null);
             }}
-            placeholder="예) 수학 문제집 2쪽 풀기"
+            placeholder="예) 문제집과 오답 노트"
             maxLength={60}
             className={inputClass}
             autoFocus={!editing}

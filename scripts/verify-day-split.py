@@ -145,7 +145,7 @@ def main() -> int:
             # 데모 데이터는 한 번 저장돼야 localStorage 에 남습니다 — 항목 하나를 넣어 둡니다.
             page.click('[data-testid="open-add"]')
             page.wait_for_selector('[data-testid="save-task"]')
-            page.fill('[role="dialog"] input[placeholder="예) 수학 문제집 2쪽 풀기"]', '준비용 항목')
+            page.fill('[role="dialog"] input[placeholder="예) 문제집과 오답 노트"]', '준비용 항목')
             page.click('[data-testid="save-task"]')
             page.wait_for_selector('text=공부 항목을 추가했어요', timeout=8000)
             page.wait_for_timeout(400)

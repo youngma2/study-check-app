@@ -203,7 +203,7 @@ def main() -> int:
             # 먼저 아무 항목이나 저장해 데모 DB 를 기기에 남깁니다.
             page.click('[data-testid="open-add"]')
             page.wait_for_selector('[data-testid="save-task"]')
-            page.fill('[role="dialog"] input[placeholder="예) 수학 문제집 2쪽 풀기"]', '준비용 항목')
+            page.fill('[role="dialog"] input[placeholder="예) 문제집과 오답 노트"]', '준비용 항목')
             page.click('[data-testid="save-task"]')
             page.wait_for_selector('text=공부 항목을 추가했어요', timeout=8000)
             page.wait_for_timeout(500)

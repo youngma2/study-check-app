@@ -175,7 +175,7 @@ def main() -> int:
             check('다음 주(12/1): 처음엔 항목 없음', page.locator('[data-testid="task-card"]').count() == 0)
             page.get_by_role('button', name=re.compile('항목 추가하기')).first.click()
             page.wait_for_selector('[data-testid="save-task"]')
-            page.get_by_placeholder('예) 수학 문제집 2쪽 풀기').fill('다음 주 미리 숙제')
+            page.get_by_placeholder('예) 문제집과 오답 노트').fill('다음 주 미리 숙제')
             page.click('[data-testid="save-task"]')
             page.wait_for_selector('[data-testid="task-card"]', timeout=6000)
             page.wait_for_timeout(400)
