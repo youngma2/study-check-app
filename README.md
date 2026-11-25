@@ -517,6 +517,9 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     부모 PIN 화면 → 사용 완료 · 보상 설정 저장
   - PIN 진동: `python3 scripts/verify-pin-vibrate.py` (**8개 통과**) — 숫자·지우기 15ms, 틀린 PIN `[30,50,30]`,
     vibrate 없는 기기에서도 오류 0
+  - 라이브 화면: `python3 scripts/verify-tier-live.py` (**9개 통과**) — 상단 시즌 바·이름 옆 엠블럼·
+    Supabase 승급 기록을 읽어 🎁 상자 표시·상자 열기·JS 오류 0·서비스 워커 v4·부모 PIN 화면·키패드 11개
+    (스크린샷 `downloads/study_tier_live_child.png` · `study_tier_live_box.png` · `study_tier_live_pin.png`)
   - 라이브 DB(`trhcatbuoslyjdhezobz`): `family_tier_events`·`family_reward_settings` 생성, RPC 4개 실호출 —
     중복 호출은 `created:false`, 세부 단계(4·5)는 상자 없음 / 큰 티어(3·6)만 상자, 아이가 설정 변경 42501,
     부모 PIN 없이 사용 완료 42501. 승급 한마디 → `push_sent_at` 1초 뒤 채워짐(= 트리거·함수 실제 발송)
