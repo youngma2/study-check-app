@@ -259,6 +259,11 @@ families(id text, name)
   브라우저가 하는 복호화를 그대로 재현해 검사합니다.
 - 알림 실패가 한마디 저장을 막지 않습니다(트리거가 예외를 삼킴). 같은 한마디는 `push_sent_at` 으로 두 번 울리지 않습니다.
 - 410/404(사라진 기기)·401/403(키가 바뀐 구독)은 함수가 구독 표에서 지웁니다.
+- 알림 그림은 서비스 워커가 정합니다: `icon: icons/icon-192.png`(앱 아이콘, 알림 카드의 큰 그림) ·
+  `badge: badge-96.png`(안드로이드 상단 바용 — **투명 배경 + 흰색(#FFFFFF) 실루엣**). payload 에 아이콘이
+  없어도 이 기본값을 쓰므로 함수를 다시 배포하지 않아도 됩니다. 배지는 앱 아이콘(그라데이션 배경 + 흰 달력)을
+  그대로 줄이면 흰 네모가 되므로, 같은 심볼(달력+체크)을 도형으로 다시 그립니다 — `python3 scripts/make-badge.py`
+  (`public/badge-96.png` · `public/badge-192.png`, 미리보기 `.tmp/badge-preview.png`).
 
 **확인·문제 찾기**
 
@@ -583,6 +588,18 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
   - 라이브 DB(`trhcatbuoslyjdhezobz`): `family_tier_events`·`family_reward_settings` 생성, RPC 4개 실호출 —
     중복 호출은 `created:false`, 세부 단계(4·5)는 상자 없음 / 큰 티어(3·6)만 상자, 아이가 설정 변경 42501,
     부모 PIN 없이 사용 완료 42501. 승급 한마디 → `push_sent_at` 1초 뒤 채워짐(= 트리거·함수 실제 발송)
+
+- **🔔 알림 앱 아이콘 · 상단 바 배지** (2026-11-25)
+  - 아이콘: `python3 scripts/make-badge.py` — `public/badge-96.png`(2494B)·`badge-192.png`,
+    모서리 알파 0 · 불투명 부분은 순수 `#FFFFFF` 뿐 · 불투명 18.7% + 가장자리 안티에일리어싱 21.6%
+  - 서비스 워커: `showNotification` 이 `icon: icons/icon-192.png` · `badge: badge-96.png` 를 항상 넣음
+    (payload 에 값이 있으면 그것, 없거나 비면 기본값) `CACHE_NAME = study-check-shell-v6`
+  - 라이브(https://youngma2.github.io/study-check-app/): `badge-96.png`·`icons/icon-192.png`·`sw.js` 모두 HTTP 200,
+    `sw.js` 에 `study-check-shell-v6` · `badge-96.png` 포함, 받은 배지 PNG 실측 96×96 RGBA
+    (모서리 알파 0 · 불투명 색 `(255,255,255)` 만)
+  - 브라우저: 서비스 워커 v6 `activated`·구 캐시(v5) 삭제·`.../badge-96.png?v=4` 캐시 완료,
+    scope `https://youngma2.github.io/study-check-app/` 기준 배지 주소 정상 해석
+  - 실제 가족 알림은 보내지 않았습니다(테스트 푸시로 남긴 한마디·`push_sent_at` 없음)
 
 ## 9. 다음에 붙이면 좋은 것
 
