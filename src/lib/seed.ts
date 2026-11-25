@@ -37,9 +37,9 @@ function members(now: Date): Member[] {
       emoji: '🌸',
       color: 'rose',
       presets: [
-        { title: '아라온 인강 듣기', subject: 'english' },
         { title: '스픽 10분 말하기', subject: 'english' },
-        { title: '신문 쓰기', subject: 'korean' },
+        { title: '영어 단어 10개 외우기', subject: 'english' },
+        { title: '받아쓰기 연습', subject: 'korean' },
         { title: '수학 문제집 2쪽', subject: 'math' },
       ],
       created_at: createdAt,
@@ -70,12 +70,12 @@ interface PlanItem {
   days: number[];
 }
 
-/** 샘플 주간 항목: 둘째(온리원·스픽·문제집·책 읽기), 첫째(아라온·스픽·신문 쓰기) */
+/** 샘플 주간 항목: 둘째(온리원·스픽·문제집·책 읽기), 첫째(스픽·영어 단어·받아쓰기·문제집) */
 const WEEKLY_PLANS: Record<string, PlanItem[]> = {
   mem_child1: [
-    { title: '아라온 인강 듣기', subject: 'english', days: [0, 1, 2, 3, 4] },
     { title: '스픽 10분 말하기', subject: 'english', days: [0, 1, 2, 3, 4, 5] },
-    { title: '신문 쓰기', subject: 'korean', days: [0, 2, 4] },
+    { title: '영어 단어 10개 외우기', subject: 'english', days: [0, 1, 2, 3, 4] },
+    { title: '받아쓰기 연습', subject: 'korean', days: [0, 2, 4] },
     { title: '수학 문제집 2쪽', subject: 'math', days: [1, 3] },
   ],
   mem_child2: [

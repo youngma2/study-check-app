@@ -206,7 +206,7 @@ def main() -> int:
                 page.locator('[data-testid="complete-task"]').count() + page.locator('[data-testid="complete-locked"]').count() == 7
                 and page.locator('[data-testid="complete-locked"]').count() == 7,
             )
-            check('기본 목록: 금요일(월·수·금 패턴)에 하던 항목을 가져온다', '신문 쓰기' in page.inner_text('main'))
+            check('기본 목록: 금요일(월·수·금 패턴)에 하던 항목을 가져온다', '받아쓰기 연습' in page.inner_text('main'))
             check('기본 목록: 격주 상담 항목은 넣지 않는다', '상담' not in page.inner_text('main'))
             page.wait_for_timeout(2800)
 

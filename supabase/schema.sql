@@ -955,9 +955,9 @@ values
   ('mem_dad',    'fam_our_home', '아빠', 'parent', null,  '👨🏻', 'sky',    '[]'::jsonb),
   ('mem_mom',    'fam_our_home', '엄마', 'parent', null,  '👩🏻', 'violet', '[]'::jsonb),
   ('mem_child1', 'fam_our_home', '첫째', 'child',  '중1', '🌸',   'rose',   '[
-     {"title": "아라온 인강 듣기", "subject": "english"},
      {"title": "스픽 10분 말하기", "subject": "english"},
-     {"title": "신문 쓰기", "subject": "korean"},
+     {"title": "영어 단어 10개 외우기", "subject": "english"},
+     {"title": "받아쓰기 연습", "subject": "korean"},
      {"title": "수학 문제집 2쪽", "subject": "math"}
    ]'::jsonb),
   ('mem_child2', 'fam_our_home', '둘째', 'child',  '초4', '⚡',   'amber',  '[
@@ -971,9 +971,9 @@ on conflict (id) do nothing;
 -- 이번 주(월~일) 샘플 숙제. 날짜는 한국 시간 기준 이번 주 월요일부터 채웁니다.
 with plan (member_id, idx, title, subject, days) as (
   values
-    ('mem_child1', 0, '아라온 인강 듣기',   'english', array[0, 1, 2, 3, 4]),
-    ('mem_child1', 1, '스픽 10분 말하기',   'english', array[0, 1, 2, 3, 4, 5]),
-    ('mem_child1', 2, '신문 쓰기',          'korean',  array[0, 2, 4]),
+    ('mem_child1', 0, '스픽 10분 말하기',   'english', array[0, 1, 2, 3, 4, 5]),
+    ('mem_child1', 1, '영어 단어 10개 외우기', 'english', array[0, 1, 2, 3, 4]),
+    ('mem_child1', 2, '받아쓰기 연습',      'korean',  array[0, 2, 4]),
     ('mem_child1', 3, '수학 문제집 2쪽',    'math',    array[1, 3]),
     ('mem_child2', 0, '온리원 강의 듣기',   'etc',     array[0, 1, 2, 3, 4]),
     ('mem_child2', 1, '스픽 10분 말하기',   'english', array[0, 1, 2, 3, 4, 5]),
