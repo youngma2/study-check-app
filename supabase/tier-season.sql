@@ -165,7 +165,8 @@ begin
   end if;
 
   -- 승급 알림: 가족 알림판에 축하 한마디 → 기존 트리거가 폰 푸시를 보냅니다.
-  --   쓴 사람은 부모로 둡니다. 아이 기기에서 승급이 잡혀도 그 아이 폰에도 알림이 가도록.
+  --   글쓴이(author_id)는 부모로 둡니다 — 아이 기기에서 승급이 잡혀도 그 아이 폰에도 알림이 가도록.
+  --   화면에는 '아빠' 가 아니라 '🐣 쪼꼬' 로 보이게 author_kind = 'jjokko' (supabase/notes-jjokko.sql).
   if p_notify then
     if v_actor.role = 'parent' then
       v_author := v_actor.id;
@@ -196,8 +197,8 @@ begin
     v_content := '🎉 ' || v_member.name || v_josa || ' [' || v_title || v_div_text || '] 티어로 승급했어요!'
       || case when v_minutes is not null then ' 🎁 뽑기 상자가 열렸어요!' else '' end;
 
-    insert into public.family_notes (id, family_id, author_id, content)
-    values (v_note_id, v_actor.family_id, v_author, left(v_content, 300))
+    insert into public.family_notes (id, family_id, author_id, author_kind, content)
+    values (v_note_id, v_actor.family_id, v_author, 'jjokko', left(v_content, 300))
     on conflict (id) do nothing;
     v_noted := found;
   end if;

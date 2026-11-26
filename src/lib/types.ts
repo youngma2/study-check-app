@@ -51,12 +51,21 @@ export interface Task {
   updated_at?: string | null;
 }
 
+/**
+ * 한마디를 남긴 주체.
+ * · 'member' — 가족이 직접 남긴 글
+ * · 'jjokko' — 쪼꼬가 자동으로 남긴 알림(티어 승급·부재중 전화 등). 화면에는 '🐣 쪼꼬' 로 보입니다.
+ */
+export type NoteAuthorKind = 'member' | 'jjokko';
+
 /** 💬 우리 가족 한마디 — 가족 알림판에 남긴 짧은 글. */
 export interface FamilyNote {
   id: string;
   family_id: string;
-  /** 쓴 사람 (family_members.id) */
+  /** 쓴 사람 (family_members.id) — 쪼꼬 글도 DB 에는 부모 id 로 들어갑니다(알림이 모든 폰에 가도록). */
   author_id: string;
+  /** 자동 알림이면 'jjokko'. 예전 글·기기 저장 모드에는 없을 수 있습니다. */
+  author_kind?: NoteAuthorKind;
   content: string;
   created_at: string;
 }

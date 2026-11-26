@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { cx } from '../lib/cx';
 import { formatShortDate, relativeDayLabel } from '../lib/date';
-import { NOTE_MAX_LENGTH, formatNoteTime, noteDate, type NotesState } from '../lib/notes';
+import { NOTE_MAX_LENGTH, formatNoteTime, isJjokkoNote, noteBody, noteAuthorName, JJOKKO_EMOJI, noteDate, type NotesState } from '../lib/notes';
 import { memberTheme } from '../lib/theme';
 import type { FamilyNote, Member } from '../lib/types';
 import { XIcon } from './icons';
@@ -183,31 +183,47 @@ export function FamilyNotesBoard({
         <ul className="mt-2 space-y-1.5">
           {visibleNotes.map((note) => {
             const author = members.find((member) => member.id === note.author_id);
-            const theme = memberTheme(author?.color ?? 'sky');
+            const jjokko = isJjokkoNote(note);
+            const theme = memberTheme(jjokko ? 'violet' : (author?.color ?? 'sky'));
             const canDelete = isParent || note.author_id === currentMemberId;
             return (
               <li
                 key={note.id}
                 data-testid="family-note"
-                className="flex items-start gap-2 rounded-2xl bg-slate-50/80 p-2.5 ring-1 ring-slate-900/5"
+                data-author-kind={jjokko ? 'jjokko' : 'member'}
+                className={cx(
+                  'flex items-start gap-2 rounded-2xl p-2.5 ring-1',
+                  jjokko ? 'bg-violet-50/70 ring-violet-100' : 'bg-slate-50/80 ring-slate-900/5',
+                )}
               >
                 <span
                   aria-hidden
                   className={cx('grid h-7 w-7 shrink-0 place-items-center rounded-full text-[13px]', theme.soft)}
                 >
-                  {author?.emoji ?? '🙂'}
+                  {jjokko ? JJOKKO_EMOJI : (author?.emoji ?? '🙂')}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-extrabold text-slate-800">
-                      {author?.name ?? '가족'}
+                    <span
+                      data-testid="note-author"
+                      className={cx(
+                        'text-[11px] font-extrabold',
+                        jjokko ? 'text-violet-700' : 'text-slate-800',
+                      )}
+                    >
+                      {noteAuthorName(note, members)}
                     </span>
+                    {jjokko ? (
+                      <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[8.5px] font-extrabold text-violet-600">
+                        자동 알림
+                      </span>
+                    ) : null}
                     <span className="text-[9px] font-semibold text-slate-400">
                       {formatNoteTime(note.created_at)}
                     </span>
                   </div>
                   <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px] font-semibold leading-relaxed text-slate-700">
-                    {note.content}
+                    {noteBody(note)}
                   </p>
                 </div>
                 {canDelete ? (

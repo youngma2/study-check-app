@@ -124,6 +124,8 @@ interface NoteRow {
   id: string;
   family_id: string;
   author_id: string;
+  /** 'jjokko' = 쪼꼬가 자동으로 올린 알림(티어 승급·부재중 전화 등) — 본문에 쪼꼬 이름을 씁니다. */
+  author_kind?: string | null;
   content: string;
   created_at: string;
 }
@@ -227,7 +229,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     // 한마디 하나에 한 번만: 아직 안 보낸 글이면 지금 보낸다고 먼저 표시합니다.
     const claimed = await rest<NoteRow[]>(
-      `family_notes?id=eq.${encodeURIComponent(noteId)}&push_sent_at=is.null&select=id,family_id,author_id,content,created_at`,
+      `family_notes?id=eq.${encodeURIComponent(noteId)}&push_sent_at=is.null&select=id,family_id,author_id,author_kind,content,created_at`,
       { method: 'PATCH', body: JSON.stringify({ push_sent_at: new Date().toISOString() }) },
     );
     if (!claimed || claimed.length === 0) return json({ ok: true, skipped: 'already-sent' });
@@ -250,7 +252,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
     const targets = (subs ?? []).filter((sub) => sub.member_id !== note.author_id);
     if (targets.length === 0) return json({ ok: true, sent: 0, note: note.id });
 
-    const authorName = authors?.[0]?.name ?? '가족';
+    // 쪼꼬가 자동으로 올린 알림은 '아빠' 가 아니라 '🐣 쪼꼬' 이름으로 보여 줍니다.
+    const authorName =
+      note.author_kind === 'jjokko' ? '🐣 쪼꼬' : (authors?.[0]?.name ?? '가족');
     const date = noteDate(note);
     const payload = {
       title: '💬 우리 가족 한마디',

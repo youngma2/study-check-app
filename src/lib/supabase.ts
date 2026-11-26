@@ -92,6 +92,8 @@ interface FamilyNoteRow {
   id: string;
   family_id: string;
   author_id: string;
+  /** 'jjokko' = 쪼꼬가 자동으로 올린 알림(티어 승급·부재중 전화 등) — supabase/notes-jjokko.sql */
+  author_kind?: string | null;
   content: string;
   created_at: string;
   push_sent_at?: string | null;
@@ -146,6 +148,7 @@ function toNote(row: FamilyNoteRow): FamilyNote {
     id: row.id,
     family_id: row.family_id,
     author_id: row.author_id,
+    author_kind: row.author_kind === 'jjokko' ? 'jjokko' : 'member',
     content: row.content,
     created_at: row.created_at,
   };

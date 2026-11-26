@@ -14,7 +14,7 @@ import { playNoteChime } from './lib/chime';
 import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { defaultItemsForDay } from './lib/defaults';
 import { deepLinkDate } from './lib/deeplink';
-import { formatNoteTime, noteDate } from './lib/notes';
+import { JJOKKO_EMOJI, formatNoteTime, noteAuthorName, noteBody, noteDate } from './lib/notes';
 import { summarize } from './lib/store';
 import { formatXp, xpChangeForStatus } from './lib/season';
 import { useStudy, type ActionResult } from './lib/study-context';
@@ -92,9 +92,9 @@ export default function App() {
   }, [toast]);
 
   const latestUnseen = unseenNotes[0] ?? null;
-  const latestUnseenAuthor = latestUnseen
-    ? study.members.find((member) => member.id === latestUnseen.author_id)
-    : undefined;
+  /** 자동 알림(티어 승급·부재중 전화 등)은 '쪼꼬' 로 보여 줍니다(supabase/notes-jjokko.sql). */
+  const latestUnseenAuthorName = latestUnseen ? noteAuthorName(latestUnseen, study.members) : '가족';
+  const latestUnseenBody = latestUnseen ? noteBody(latestUnseen) : '';
 
   /** 알림 배너를 누르면: 그 한마디가 붙은 날짜의 알림판으로 가면서 배너를 닫습니다. */
   const openNoteDay = (noteId: string) => {
@@ -121,7 +121,7 @@ export default function App() {
     if (notifyPermission === 'granted') {
       const title = '💬 우리 가족 한마디';
       const options: NotificationOptions = {
-        body: `${latestUnseenAuthor?.name ?? '가족'}: ${latestUnseen.content}`,
+        body: `${latestUnseenAuthorName}: ${latestUnseenBody}`,
         // 앱을 보고 있을 때 뜨는 알림도 같은 앱 아이콘·상단 바 배지를 씁니다(서비스 워커 알림과 동일).
         icon: `${import.meta.env.BASE_URL}icons/icon-192.png?v=4`,
         badge: `${import.meta.env.BASE_URL}badge-96.png?v=4`,
@@ -165,7 +165,7 @@ export default function App() {
     }
 
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [latestUnseen, latestUnseenAuthor, notifyPermission]);
+  }, [latestUnseen, latestUnseenAuthorName, latestUnseenBody, notifyPermission]);
 
   /**
    * '🔔 알림 켜기' — 브라우저 알림 권한을 받고, 이 기기를 백그라운드 알림에 등록합니다.
@@ -529,7 +529,7 @@ export default function App() {
             <button
               type="button"
               data-testid="open-note-alert"
-              aria-label={`새 한마디: ${latestUnseenAuthor?.name ?? '가족'} — ${latestUnseen.content}. 누르면 그 날 한마디로 이동해요.`}
+              aria-label={`새 한마디: ${latestUnseenAuthorName} — ${latestUnseenBody}. 누르면 그 날 한마디로 이동해요.`}
               onClick={(event) => {
                 event.stopPropagation();
                 openNoteDay(latestUnseen.id);
@@ -540,11 +540,15 @@ export default function App() {
                 💬
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-[10px] font-extrabold tracking-wide text-white/75">
-                  새 한마디 · {latestUnseenAuthor?.name ?? '가족'}
+                <span
+                  data-testid="note-alert-author"
+                  className="block text-[10px] font-extrabold tracking-wide text-white/75"
+                >
+                  새 한마디 · {latestUnseen.author_kind === 'jjokko' ? `${JJOKKO_EMOJI} ` : ''}
+                  {latestUnseenAuthorName}
                 </span>
                 <span className="mt-0.5 block break-words text-[12.5px] font-extrabold leading-snug">
-                  {latestUnseen.content}
+                  {latestUnseenBody}
                 </span>
                 <span className="mt-1 block text-[9.5px] font-bold text-white/60">
                   {formatNoteTime(latestUnseen.created_at)}

@@ -1,5 +1,5 @@
 import { formatTimeKo, koreaTodayISO, todayISO, toISODate, addDays } from './date';
-import type { FamilyNote } from './types';
+import type { FamilyNote, Member } from './types';
 
 /**
  * 💬 우리 가족 한마디 — 기기 저장(데모) 모드에서 쓰는 작은 저장소와 공통 도우미.
@@ -12,6 +12,40 @@ import type { FamilyNote } from './types';
 export const LOCAL_NOTES_KEY = 'study-check.notes.v1';
 export const NOTES_SEEN_KEY = 'study-check.notes-seen.v1';
 export const NOTE_MAX_LENGTH = 300;
+
+/*
+ * 🐣 쪼꼬가 자동으로 남기는 한마디(티어 승급 · 부재중 전화 등)
+ *
+ * DB 에는 쓴 사람을 부모로 두고(`author_kind = 'jjokko'`) 화면에서만 '쪼꼬' 로 보여 줍니다.
+ * 그래야 알림이 모든 가족 폰(아이 폰 포함)으로 갑니다.
+ * 예전 글은 본문이 `🐣 쪼꼬: …` 로 시작하는 경우가 있어 그것도 같은 쪼꼬 글로 알아봅니다.
+ */
+export const JJOKKO_NAME = '쪼꼬';
+export const JJOKKO_EMOJI = '🐣';
+const JJOKKO_PREFIX = /^\s*(?:🐣\s*)?쪼꼬\s*[:：]\s*/;
+
+/** 쪼꼬가 남긴 자동 알림 글인가? */
+export function isJjokkoNote(note: Pick<FamilyNote, 'author_kind' | 'content'>): boolean {
+  if (note.author_kind === 'jjokko') return true;
+  return JJOKKO_PREFIX.test(note.content ?? '');
+}
+
+/** 화면에 보여 줄 본문 — 쪼꼬 글은 배지가 이름을 알려 주니 본문 앞의 `🐣 쪼꼬:` 는 덜어냅니다. */
+export function noteBody(note: Pick<FamilyNote, 'author_kind' | 'content'>): string {
+  const text = note.content ?? '';
+  if (!isJjokkoNote(note)) return text;
+  const stripped = text.replace(JJOKKO_PREFIX, '').trim();
+  return stripped || text;
+}
+
+/** 화면에 보여 줄 작성자 이름 (자동 알림은 '쪼꼬'). */
+export function noteAuthorName(
+  note: Pick<FamilyNote, 'author_id' | 'author_kind' | 'content'>,
+  members: Member[],
+): string {
+  if (isJjokkoNote(note)) return JJOKKO_NAME;
+  return members.find((member) => member.id === note.author_id)?.name ?? '가족';
+}
 
 export type NotesState = 'loading' | 'ready' | 'unavailable';
 
