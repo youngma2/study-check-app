@@ -208,7 +208,8 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 families(id text, name)
   ├ family_members(id text, family_id, name, role['parent'|'child'], grade?, emoji, color, presets)
   ├ tasks(id text, family_id, member_id, title, subject, due_date, status, note?, created_by, verified_by?, verified_at?)
-  ├ family_notes(id text, family_id, author_id, content, created_at, push_sent_at?)   ← 💬 우리 가족 한마디
+  ├ family_notes(id text, family_id, author_id, author_kind['member'|'jjokko'], content, created_at, push_sent_at?)
+  │                                                                    ← 💬 우리 가족 한마디 (jjokko = 🐣 쪼꼬 자동 알림)
   ├ family_secrets(family_id text primary key, parent_pin_hash text)   ← 부모 관리 PIN 해시 (anon 접근 불가)
   ├ push_subscriptions(endpoint text primary key, family_id, member_id, p256dh, auth, ...) ← 🔔 기기별 구독 (anon 접근 불가)
   ├ push_config(key text primary key, value text)                      ← 🔔 함수 주소·훅 비밀값·VAPID 키 (공개키 한 줄만 anon 읽기)
@@ -409,6 +410,29 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **🐣 자동 알림(티어 승급 · 부재중 전화)은 '쪼꼬' 명의로** (2026-11-26)
+  - 왜: 승급 축하 한마디가 `family_notes.author_id = mem_dad` 로 들어가 화면·푸시에 **아빠**로 보였습니다.
+    쪼꼬가 남긴 부재중 전화 기록도 본문만 `🐣 쪼꼬: …` 이고 작성자 배지는 아빠였습니다(영민님 지시로 전부 쪼꼬 명의로 변경).
+  - 어떻게: `family_notes.author_kind`(`'member'` | `'jjokko'`) 한 칸을 더했습니다.
+    - 글쓴이(`author_id`)는 그대로 부모입니다 — 그래야 아이 폰까지 푸시가 갑니다. **화면 표시만** 쪼꼬로 바꿉니다.
+    - `study_tier_promotion` 은 한마디를 넣을 때 `author_kind = 'jjokko'`.
+    - 새 RPC `study_add_jjokko_note(p_actor_id, p_content, p_id?)` — 부재중 전화처럼 쪼꼬가 남기는 글.
+    - BEFORE INSERT 트리거 `study_note_before_insert_jjokko` — 본문이 `🐣 쪼꼬: …` 로 시작하면 자동으로 쪼꼬 글로 바꾸고 접두사를 덜어 냅니다(예전 방식으로 올리는 자동화도 그대로 동작).
+    - 이미 올라간 글도 정리(8-5): 티어 승급 id(`n_…_tier_…`)·`🐣 쪼꼬:` 본문 → `jjokko`, 접두사 제거. **오늘 17:33 찬율 실버 III 승급 글과 17:49 통화 2 부재중 글 포함**(현재 쪼꼬 글 5건).
+  - 앱: 알림판 행에 `🐣 쪼꼬` + `자동 알림` 배지(보라색), 새 글 배너·앱 안 OS 알림 제목도 `🐣 쪼꼬`, 푸시 함수(`send-note-push`) 본문도 `🐣 쪼꼬: …`.
+  - SQL: `supabase/notes-jjokko.sql` (= `schema.sql` 8번, 여러 번 실행해도 안전). `setup.html` 도 자동 재생성.
+  - 검증: `python3 scripts/verify-live-jjokko.py` — **22개 통과**(라이브 · 실제 DB)
+    - DB: 쪼꼬 글 5건(티어 4 · 부재중 1) · 본문에 `🐣 쪼꼬:` 접두사 남지 않음
+    - 오늘 알림판: 쪼꼬 행 4/4 · 작성자 전부 `쪼꼬` · `자동 알림` 배지 · 🐣 아바타 · 가족이 쓴 글은 그대로 `아빠`
+    - 어제(11/25) 알림판: 지난 티어 승급 글도 `쪼꼬` 1/1
+    - 새 글 배너: `새 한마디 · 🐣 쪼꼬` (본문 접두사 겹침 없음)
+    - JS 오류 0 · 서비스 워커 `study-check-shell-v8`
+  - 기존 화면 검증 그대로 통과: `verify-family-board.py` **23개 통과**(데모 · 엄마 글은 그대로 '엄마')
+  - 라이브 DB RPC 실호출(트랜잭션 롤백으로 DB 무변경): `study_add_jjokko_note` → `jjokko` · `study_add_note('🐣 쪼꼬: …')` → `jjokko`+접두사 제거 · 사람 글 → `member` · `study_tier_promotion` → 승급 기록 + `jjokko` 한마디
+  - 푸시 함수(`send-note-push`) 는 대시보드에서 두 줄 수정 후 재배포(`author_kind` 조회 + `🐣 쪼꼬` 이름) — `action: health` 응답 `ok · subscriptions 4 · serviceKeyPresent true` 로 배포 확인.
+    **폰 상단바에 실제로 뜬 화면은 기기 화면이라 확인하지 못했습니다**(발송 경로·문구 코드까지만 검증).
+  - 화면: `downloads/study_jjokko_today.png` · `study_jjokko_yesterday.png` · `study_jjokko_banner.png`
 
 - **⚖️ 지연 완료 XP 차등 · 취소 회수** (2026-11-26)
   - 계산: `node scripts/verify-season.mjs` (**144개 통과**) — 당일 100%(10) · 하루 지남 50%(5) · 이틀+ 25%(2.5),
