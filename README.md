@@ -419,6 +419,9 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     - 달력 카드 안에 `확인 대기`·`진행 중`·`모두 완료`·`공휴일` 문구와 범례 색 점 없음
     - 기존 기능 그대로: 날짜 7칸 · 날짜 선택 · 다음 주 이동 · 공휴일(12/25 성탄절) 안내 줄·빨간 점 · 체크리스트 완료/되돌리기 · 한마디 등록 · 통계 대시보드 · 가로 오버플로 0px · JS 오류 0
   - 화면: `downloads/study_no_legend.png`
+  - 라이브 확인: `python3 scripts/verify-live-no-legend.py` — **9개 통과** (아이 화면, 읽기 전용 · DB 무변경)
+    - 라이브 달력 카드에 범례 문구·색 점 없음 · 날짜 7칸 · 서비스 워커 `study-check-shell-v9` 활성 · JS 오류 0
+    - 화면: `downloads/study_no_legend_live.png`
 
 - **🐣 자동 알림(티어 승급 · 부재중 전화)은 '쪼꼬' 명의로** (2026-11-26)
   - 왜: 승급 축하 한마디가 `family_notes.author_id = mem_dad` 로 들어가 화면·푸시에 **아빠**로 보였습니다.
