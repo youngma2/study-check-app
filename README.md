@@ -420,6 +420,12 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
   - 화면: `downloads/study_xp_child_today.png` · `study_xp_child_yesterday.png` · `study_xp_child_two_ago.png` ·
     `study_xp_notice_50.png` · `study_xp_notice_25.png` · `study_xp_parent_late_complete.png` · `study_xp_revert_toast.png`
   - `tsc --noEmit` 0 · `npm run build` 성공 · 서비스 워커 캐시 `study-check-shell-v7`
+  - **라이브**(https://youngma2.github.io/study-check-app/ · 실제 Supabase `trhcatbuoslyjdhezobz`) `python3 scripts/verify-live-xp.py` **16개 통과**
+    - `sw.js` = `study-check-shell-v7`
+    - 화면 XP 가 DB 를 같은 규칙으로 다시 센 값과 일치 — 예원 **20 XP**(11/25 당일 완료 2건) · 찬율 **50 XP**(11/25 당일 완료 5건, 전화 항목 제외)
+    - 오늘 항목 카드 7개 모두 `+10 XP` · 어제(11/25) 안내 `지금 완료하면 항목 XP 50%` · 남은 항목 `+5 XP · 하루 지남 50%` · 완료 항목 `+10 XP` · 그제(11/24) 안내 `XP 25%`
+    - JS 오류 0 · **DB 무변경**: `tasks` 497 → 497 · `family_tier_events` 1 → 1 · 완료 상태 그대로
+    - 화면: `downloads/study_xp_live_child1.png` · `study_xp_live_child2_yesterday.png` · `study_xp_live_notice.png`
   - 기존 화면 검증도 그대로 통과(실패 0): `verify-tier-ui.py`(40) · `verify-dashboard.py`(34) · `verify-parent-pin.py` ·
     `verify-family-board.py` · `verify-child-parent-defaults.py` · `verify-day-split.py` · `verify-demo-gift.py`
     - 이 중 날짜·요일이 박혀 있던 검사는 `page.clock.set_fixed_time(...)` 으로 '오늘'을 고정해, 시간이 지나도 같은 결과가 나오게 했습니다
