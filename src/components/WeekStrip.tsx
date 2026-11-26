@@ -169,27 +169,6 @@ export function WeekStrip({
             .join(' · ')}
         </p>
       ) : null}
-
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[9.5px] font-semibold text-slate-400">
-        <span className="flex items-center gap-1">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-          확인 대기
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />
-          진행 중
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          모두 완료
-        </span>
-        {weekHolidays.length > 0 ? (
-          <span className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-            공휴일
-          </span>
-        ) : null}
-      </div>
     </section>
   );
 }

@@ -9,3 +9,4 @@ dist-demo
 !.env.example
 
 public/setup.html
+dist-no-legend
