@@ -174,8 +174,10 @@ def run() -> int:
         page.screenshot(path=str(DOWNLOADS / 'study_xp_live_child1.png'))
 
         # ------------------------------------------------ 2) 찬율(둘째) 어제 화면 — 50%
+        # 해시만 바뀌면 앱이 다시 읽지 않으므로 새로고침해서 역할·날짜를 바꿉니다.
         page.goto(f'{URL}#as=mem_child2', wait_until='networkidle')
-        page.wait_for_selector('[data-testid="season-bar"]', timeout=30000)
+        page.reload(wait_until='networkidle')
+        page.wait_for_selector('[data-testid="tier-panel-mem_child2"]', timeout=30000)
         expected2 = month_xp(tasks_before, 'mem_child2', TODAY)
         shown2 = text_of(page, '[data-testid="tier-xp-mem_child2"]')
         check('찬율 이번 달 XP = DB 재계산 값', shown2 == f'{format_xp(expected2)} XP',
@@ -204,7 +206,9 @@ def run() -> int:
             if task['title'] in seen:
                 continue
             seen.add(task['title'])
-            card = page.locator('[data-testid="task-card"]', has_text=task['title']).first
+            card = page.locator('[data-testid="task-card"]').filter(
+                has=page.locator(f'p[title="{task["title"]}"]')
+            ).first
             if card.count() == 0:
                 mismatched.append(f"{task['title']}: 카드 없음")
                 continue
