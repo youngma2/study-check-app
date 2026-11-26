@@ -16,6 +16,7 @@ import { defaultItemsForDay } from './lib/defaults';
 import { deepLinkDate } from './lib/deeplink';
 import { formatNoteTime, noteDate } from './lib/notes';
 import { summarize } from './lib/store';
+import { formatXp, xpChangeForStatus } from './lib/season';
 import { useStudy, type ActionResult } from './lib/study-context';
 import type { NewTaskInput, Task } from './lib/types';
 
@@ -313,24 +314,46 @@ export default function App() {
   };
 
   /** 완료 체크 — 누르는 순간 완료로 기록되고, 그 시각이 카드에 남습니다.
-   *  아직 오지 않은 날짜의 공부는 그날이 되기 전까지 완료할 수 없습니다(버튼도 잠겨 있어요). */
+   *  아직 오지 않은 날짜의 공부는 그날이 되기 전까지 완료할 수 없습니다(버튼도 잠겨 있어요).
+   *  ⚖️ 받는 XP 는 그 날(항목 날짜)에 했는지로 정해집니다 — 당일 100% · 하루 지남 50% · 이틀 이상 25%. */
   const handleComplete = async (task: Task) => {
     if (isFutureDate(task.due_date)) {
       notify('아직 날짜가 되지 않았어요 · 그날이 되면 완료할 수 있어요');
       return;
     }
+    const completedAt = new Date().toISOString();
+    const change = xpChangeForStatus(study.db.tasks, task, 'verified', { completedAt });
     const result = await setStatus(task.id, 'verified');
     if (result.ok) {
-      const time = formatTimeKo(new Date().toISOString());
-      notify(`완료! ${time} 완료로 기록했어요`);
+      const time = formatTimeKo(completedAt);
+      const parts = [`완료! ${time}`];
+      if (change.itemDelta > 0) {
+        parts.push(`+${formatXp(change.itemDelta)} XP`);
+        if (change.item.percent < 100) parts.push(change.item.label);
+      }
+      if (change.bonusDelta > 0) parts.push(`100% 보너스 +${formatXp(change.bonusDelta)}`);
+      notify(parts.join(' · '));
       return;
     }
     notify(result.error ?? '완료하지 못했어요');
   };
 
+  /** 완료 되돌리기 — 그 항목 XP 와 그날 100%·연속 보너스까지 정확히 회수됩니다. */
   const handleRevert = async (task: Task) => {
+    const change = xpChangeForStatus(study.db.tasks, task, 'todo');
     const result = await setStatus(task.id, 'todo');
-    notify(result.ok ? '할 일로 되돌렸어요' : result.error ?? '되돌리지 못했어요');
+    if (!result.ok) {
+      notify(result.error ?? '되돌리지 못했어요');
+      return;
+    }
+    const reclaimed = Math.abs(change.delta);
+    if (reclaimed <= 0) {
+      notify('할 일로 되돌렸어요');
+      return;
+    }
+    notify(
+      `할 일로 되돌렸어요 · ${formatXp(reclaimed)} XP 회수${change.currentSeason ? '' : ' (지난 시즌)'}`,
+    );
   };
 
   const handleDelete = async (task: Task) => {

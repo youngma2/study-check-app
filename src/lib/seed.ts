@@ -138,7 +138,9 @@ export function createSeedDB(now: Date = new Date()): StudyDB {
           created_by: member.id,
           created_at: `${dateIso}T08:10:00.000Z`,
           verified_by: verified ? 'mem_mom' : null,
-          verified_at: verified ? `${dateIso}T20:40:00.000Z` : null,
+          // ⚖️ 샘플은 '그 날 저녁 8:40(한국 시간)'에 끝낸 것으로 둡니다 — 그 날 완료(XP 100%)로 보이게.
+          // (UTC 로는 같은 날 11:40Z = KST 20:40. 20:40Z 로 두면 한국 날짜로 다음 날이 되어 50%가 됩니다)
+          verified_at: verified ? `${dateIso}T11:40:00.000Z` : null,
         });
         order += 1;
       }

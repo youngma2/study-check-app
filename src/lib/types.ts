@@ -47,6 +47,8 @@ export interface Task {
   created_at: string;
   verified_by?: string | null;
   verified_at?: string | null;
+  /** 마지막으로 바꾼 시각 — completed_at·updated_at 이 없는 예전 행의 완료 시각으로 씁니다. */
+  updated_at?: string | null;
 }
 
 /** 💬 우리 가족 한마디 — 가족 알림판에 남긴 짧은 글. */

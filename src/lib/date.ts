@@ -68,6 +68,26 @@ export function koreaTodayISO(now: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * 타임스탬프(예: completed/verified_at, updated_at)를 한국 날짜 'YYYY-MM-DD' 로.
+ * XP 차등은 기기 시간대와 상관없이 항상 한국 날짜로 셉니다.
+ */
+export function koreaISODateOf(timestamp: string | null | undefined): string | null {
+  if (!timestamp) return null;
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return null;
+  return koreaTodayISO(date);
+}
+
+/** 'YYYY-MM-DD' 두 날짜의 차이(일). b 가 a 보다 뒤면 양수. (시간대 영향 없이 UTC 자정끼리 셈) */
+export function daysBetweenISO(fromIso: string, toIso: string): number {
+  const from = fromISODate(fromIso);
+  const to = fromISODate(toIso);
+  const fromUtc = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate());
+  const toUtc = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
+  return Math.round((toUtc - fromUtc) / 86_400_000);
+}
+
 /** 아직 오지 않은 날짜인지 — 그날이 되기 전에는 완료 체크를 막습니다. */
 export function isFutureDate(iso: string, today: string = koreaTodayISO()): boolean {
   return iso > today;

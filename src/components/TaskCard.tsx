@@ -1,5 +1,6 @@
 import { cx } from '../lib/cx';
-import { formatTimeKo, isFutureDate } from '../lib/date';
+import { formatTimeKo, isFutureDate, koreaTodayISO } from '../lib/date';
+import { formatXp, isXpHiddenTask, XP_PER_TASK, xpForTask } from '../lib/season';
 import { subjectMeta } from '../lib/theme';
 import type { Task } from '../lib/types';
 import { StatusBadge } from './StatusBadge';
@@ -28,6 +29,15 @@ export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, o
   const pending = task.status === 'pending_verification';
   const completedAt = verified ? formatTimeKo(task.verified_at) : null;
   const canCopy = canManage || canComplete;
+  /** ⚖️ 완료 시점별 XP — 완료했으면 받은 XP, 아직이면 지금 완료하면 받을 XP */
+  const xp = isXpHiddenTask(task) ? null : xpForTask(task, today ?? koreaTodayISO());
+  const xpChip = xp
+    ? xp.percent === 100
+      ? 'bg-indigo-50 text-indigo-600 ring-indigo-100'
+      : xp.percent === 50
+        ? 'bg-amber-50 text-amber-700 ring-amber-200/80'
+        : 'bg-rose-50 text-rose-600 ring-rose-200/80'
+    : '';
 
   return (
     <li
@@ -68,6 +78,27 @@ export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, o
               {completedAt ? (
                 <span data-testid="completed-at" className="ml-1 font-extrabold text-emerald-600">
                   · {completedAt} 완료
+                </span>
+              ) : null}
+              {xp ? (
+                <span
+                  data-testid="task-xp"
+                  title={
+                    xp.percent === 100
+                      ? '그 날 완료해서 XP 100%'
+                      : `${xp.label} — 그 날 완료했다면 ${XP_PER_TASK} XP`
+                  }
+                  className={cx(
+                    'ml-1 inline-flex items-center whitespace-nowrap rounded-full px-1 py-0.5 text-[9px] font-extrabold leading-none ring-1',
+                    xpChip,
+                  )}
+                >
+                  +{formatXp(xp.xp)} XP
+                  {xp.percent === 100 ? null : (
+                    <span data-testid="task-xp-delay" className="ml-0.5 font-bold">
+                      · {xp.label}
+                    </span>
+                  )}
                 </span>
               ) : null}
             </span>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { cx } from '../lib/cx';
 import { formatShortDate, toISODate } from '../lib/date';
 import type { TierEvent } from '../lib/rewards';
-import { DIVISIONS, levelForXp } from '../lib/season';
+import { DIVISIONS, formatXp, levelForXp } from '../lib/season';
 import { useStudy } from '../lib/study-context';
 import type { Member } from '../lib/types';
 import { RewardGiftModal } from './RewardGiftModal';
@@ -44,7 +44,7 @@ export function TierPanel({ member }: { member: Member }) {
               {level.title}
             </span>
             <span data-testid={`tier-xp-${member.id}`} className="text-[10px] font-extrabold text-slate-400">
-              {xp} XP
+              {formatXp(xp)} XP
             </span>
             {stats.streak > 0 ? (
               <span
@@ -58,7 +58,7 @@ export function TierPanel({ member }: { member: Member }) {
               <span
                 data-testid={`last-season-${member.id}`}
                 className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold leading-none text-slate-500"
-                title={`${lastSeason.season} 최고 기록 ${lastSeason.xp} XP`}
+                title={`${lastSeason.season} 최고 기록 ${formatXp(lastSeason.xp)} XP`}
               >
                 지난달 {lastSeason.level.title}
               </span>
@@ -74,8 +74,26 @@ export function TierPanel({ member }: { member: Member }) {
               />
             </span>
             <span className="shrink-0 text-[9px] font-bold tabular-nums text-slate-400">
-              {level.nextXp === null ? '최고 티어' : `${levelForXp(level.nextXp).title}까지 ${remaining} XP`}
+              {level.nextXp === null ? '최고 티어' : `${levelForXp(level.nextXp).title}까지 ${formatXp(remaining)} XP`}
             </span>
+          </div>
+
+          {/* ⚖️ 완료 시점별 XP — 아이가 카드에서 바로 비율을 봅니다. */}
+          <div data-testid={`xp-rule-${member.id}`} className="mt-1 space-y-0.5 text-[9px] font-bold leading-none text-slate-400">
+            <p className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+              <span className="font-extrabold">⚖️ 완료 XP</span>
+              <span className="text-indigo-500">당일 100%</span>
+              <span className="text-slate-300">·</span>
+              <span className="text-amber-600">하루 지남 50%</span>
+              <span className="text-slate-300">·</span>
+              <span className="text-rose-500">2일+ 25%</span>
+              {stats.lateVerified > 0 ? (
+                <span className="ml-auto shrink-0 rounded-full bg-amber-50 px-1 py-0.5 text-[8.5px] font-extrabold text-amber-700 ring-1 ring-amber-200/80">
+                  이번 달 지연 {stats.lateVerified}개
+                </span>
+              ) : null}
+            </p>
+            <p>↺ 되돌리면 그 XP 와 그날 100% 보너스까지 회수</p>
           </div>
         </div>
       </div>
@@ -129,7 +147,7 @@ export function SeasonBar({ memberId }: { memberId: string }) {
       <span data-testid="season-bar-title" className="shrink-0 text-[11px] font-extrabold leading-none text-slate-800">
         {level.title}
       </span>
-      <span className="shrink-0 text-[9.5px] font-bold leading-none text-slate-400">{xp} XP</span>
+      <span className="shrink-0 text-[9.5px] font-bold leading-none text-slate-400">{formatXp(xp)} XP</span>
       <span className="h-1 min-w-6 flex-1 overflow-hidden rounded-full bg-slate-200/90">
         <span
           className="block h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-[width] duration-500"

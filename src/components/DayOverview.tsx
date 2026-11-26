@@ -1,4 +1,5 @@
-import { formatDayTitle, holidayName, relativeDayLabel } from '../lib/date';
+import { daysBetweenISO, formatDayTitle, holidayName, koreaTodayISO, relativeDayLabel } from '../lib/date';
+import { delayName, xpPercentForDelay } from '../lib/season';
 import type { TaskSummary } from '../lib/store';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
@@ -152,6 +153,34 @@ function MemberStatCard({
   );
 }
 
+/**
+ * ⚖️ 지난 날짜 안내 — 그 날 항목을 지금 완료하면 XP 가 얼마나 깎이는지 한 줄로 보여 줍니다.
+ * (오늘·미래 날짜에는 나오지 않습니다)
+ */
+function XpDelayNotice({ dateIso, hasTasks }: { dateIso: string; hasTasks: boolean }) {
+  const today = koreaTodayISO();
+  if (!hasTasks || dateIso >= today) return null;
+  const delayDays = daysBetweenISO(dateIso, today);
+  const percent = xpPercentForDelay(delayDays);
+  const tone =
+    percent === 50
+      ? 'bg-amber-50 text-amber-700 ring-amber-200/80'
+      : 'bg-rose-50 text-rose-600 ring-rose-200/80';
+
+  return (
+    <p
+      data-testid="day-xp-notice"
+      className={cx(
+        'mx-1 mt-2 flex items-center gap-1 rounded-xl px-2 py-1.5 text-[10.5px] font-extrabold leading-none ring-1',
+        tone,
+      )}
+    >
+      ⏱ 지난 날짜 — 지금 완료하면 항목 XP {percent}% ({delayName(delayDays)})
+      <span className="ml-auto font-bold opacity-80">되돌리면 회수</span>
+    </p>
+  );
+}
+
 export function DayOverview({
   dateIso,
   summary,
@@ -204,6 +233,8 @@ export function DayOverview({
         </div>
         <ProgressRing ratio={summary.ratio} />
       </section>
+
+      <XpDelayNotice dateIso={dateIso} hasTasks={summary.total > 0} />
 
       <section
         data-testid="day-member-stats"

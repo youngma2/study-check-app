@@ -1,5 +1,6 @@
 /**
  * 시즌 티어 계산 단위 검증 — XP 구간 / 세부 단계 / 연속 100%(주말·공휴일 제외)
+ *   + ⚖️ 완료 시점별 XP 차등(당일 100% · 하루 지남 50% · 이틀 이상 25%) · 취소 시 회수
  *   사용법: node scripts/verify-season.mjs   (esbuild 로 src/lib/season.ts 를 묶어 검사합니다)
  */
 import { execFileSync } from 'node:child_process';
@@ -23,6 +24,13 @@ const {
   seasonEnd,
   pickRewardMinutes,
   TIERS,
+  xpForTask,
+  xpPercentForDelay,
+  xpAmountForDelay,
+  formatXp,
+  delayLabel,
+  completionDateOf,
+  xpChangeForStatus,
 } = await import(`file://${bundle}`);
 
 let fails = 0;
@@ -140,7 +148,167 @@ check('지난달 최고 티어 (60 XP = 브론즈 II)', past.level.title, '브�
 const crossMonth = computeSeasonStats([task('c1', '2026-10-31', 'verified', 0), task('c1', '2026-11-01', 'verified', 0)], 'c1', '2026-11-01');
 check('지난달 항목은 이번 달 XP 에서 제외', crossMonth.xp, 30);
 
-/* ── 5. 보상 뽑기 ──────────────────────────────────────────── */
+/* ── 5. ⚖️ 완료 시점별 XP 차등 · 취소 회수 ─────────────────────── */
+
+/** 완료 시각을 직접 정해 넣는 항목 (verified_at = ISO 타임스탬프) */
+function done(memberId, due, completedIso, i = 0, extra = {}) {
+  return {
+    ...task(memberId, due, 'verified', i),
+    verified_at: completedIso,
+    ...extra,
+  };
+}
+const open = (memberId, due, i = 0) => task(memberId, due, 'todo', i);
+
+check('0일 → 100%', xpPercentForDelay(0), 100);
+check('1일 → 50%', xpPercentForDelay(1), 50);
+check('2일 → 25%', xpPercentForDelay(2), 25);
+check('5일도 25%', xpPercentForDelay(5), 25);
+check('음수(미래 날짜)는 100% 로 방어', xpPercentForDelay(-1), 100);
+check('당일 10 XP', xpAmountForDelay(0), 10);
+check('하루 지남 5 XP', xpAmountForDelay(1), 5);
+check('이틀 지남 2.5 XP', xpAmountForDelay(2), 2.5);
+check('나흘 지남도 2.5 XP', xpAmountForDelay(4), 2.5);
+check('XP 표기 10', formatXp(10), '10');
+check('XP 표기 2.5', formatXp(2.5), '2.5');
+check('XP 표기 397.5', formatXp(397.5), '397.5');
+check('XP 표기 0', formatXp(0), '0');
+check('이름: 당일 100%', delayLabel(0), '당일 100%');
+check('이름: 하루 지남 50%', delayLabel(1), '하루 지남 50%');
+check('이름: 이틀 이상 25%', delayLabel(3), '이틀 이상 25%');
+
+// 한국 시간 기준 — due 2026-11-24
+const onTime = xpForTask(done('c1', '2026-11-24', '2026-11-24T10:00:00+09:00'));
+check('당일 완료 → 10 XP', onTime.xp, 10);
+check('당일 완료 → 100%', onTime.percent, 100);
+const oneDay = xpForTask(done('c1', '2026-11-24', '2026-11-25T08:00:00+09:00'));
+check('하루 뒤 완료 → 5 XP', oneDay.xp, 5);
+check('하루 뒤 완료 → 지연 1일', oneDay.delayDays, 1);
+const twoDays = xpForTask(done('c1', '2026-11-24', '2026-11-26T23:50:00+09:00'));
+check('이틀 뒤 완료 → 2.5 XP', twoDays.xp, 2.5);
+check('이틀 뒤 완료 → 지연 2일', twoDays.delayDays, 2);
+check(
+  '나흘 뒤 완료도 2.5 XP',
+  xpForTask(done('c1', '2026-11-24', '2026-11-28T09:00:00+09:00')).xp,
+  2.5,
+);
+
+// UTC 로 저장된 시각도 한국 날짜로 셉니다: 11-24T14:30Z = 11/24 23:30 KST(당일) / 15:30Z = 11/25 00:30 KST(하루)
+check(
+  'UTC 11/24 23:30 KST → 당일 100%',
+  xpForTask(done('c1', '2026-11-24', '2026-11-24T14:30:00.000Z')).xp,
+  10,
+);
+check(
+  'UTC 11/25 00:30 KST → 하루 지남 50%',
+  xpForTask(done('c1', '2026-11-24', '2026-11-24T15:30:00.000Z')).xp,
+  5,
+);
+check(
+  '한국 시간 자정 직후 완료는 다음 날로 셈',
+  xpForTask(done('c1', '2026-11-24', '2026-11-24T15:30:00.000Z')).delayDays,
+  1,
+);
+
+// 예전 행 호환 — verified_at 이 없으면 updated_at, 그것도 없으면 due_date
+const legacyUpdated = done('c1', '2026-11-24', null, 0, { updated_at: '2026-11-26T09:00:00+09:00' });
+check('verified_at 없음 → updated_at 으로 지연 계산', xpForTask(legacyUpdated).delayDays, 2);
+check('verified_at 없음 → updated_at 으로 2.5 XP', xpForTask(legacyUpdated).xp, 2.5);
+check('예전 행 표시', completionDateOf(legacyUpdated).legacy, true);
+const legacyBare = done('c1', '2026-11-24', null, 0, { updated_at: null });
+check('시각이 아예 없으면 due_date 로(당일)', xpForTask(legacyBare).xp, 10);
+check(
+  '완료한 항목은 오늘 날짜와 상관없이 같은 XP',
+  xpForTask(done('c1', '2026-11-24', '2026-11-25T08:00:00+09:00'), '2027-01-01').xp,
+  5,
+);
+
+// 아직 안 한 지난 항목 → 오늘 완료하면 받을 XP 미리보기
+const openYesterday = xpForTask(open('c1', '2026-11-25'), '2026-11-26');
+check('어제 항목을 오늘 완료하면 5 XP', openYesterday.xp, 5);
+check('모레 완료하면 2.5 XP', xpForTask(open('c1', '2026-11-25'), '2026-11-27').xp, 2.5);
+
+// 하루 안의 합계 — 지연 감점은 항목에만, 100% 보너스는 그날을 다 채우면 그대로
+const mixedDay = [
+  done('c1', '2026-11-24', '2026-11-24T20:00:00+09:00', 0),
+  done('c1', '2026-11-24', '2026-11-25T20:00:00+09:00', 1),
+  done('c1', '2026-11-24', '2026-11-27T20:00:00+09:00', 2),
+];
+const mixedStats = computeSeasonStats(mixedDay, 'c1', '2026-11-27');
+check('섞인 날: 항목 XP 10 + 5 + 2.5', mixedStats.days.find((d) => d.date === '2026-11-24').itemXp, 17.5);
+check('섞인 날: 100% 보너스 +20 은 그대로', mixedStats.days.find((d) => d.date === '2026-11-24').xp, 37.5);
+check('섞인 날: 지연 완료 2개', mixedStats.days.find((d) => d.date === '2026-11-24').lateVerified, 2);
+check('이번 시즌 지연 항목 수', mixedStats.lateVerified, 2);
+check('합계 37.5 XP', mixedStats.xp, 37.5);
+check('소수 XP 도 티어 계산에 그대로 (37.5 → 브론즈 II)', mixedStats.level.title, '브론즈 II');
+
+const lateOnly = [
+  done('c1', '2026-11-24', '2026-11-26T20:00:00+09:00', 0),
+  done('c1', '2026-11-24', '2026-11-26T20:10:00+09:00', 1),
+  done('c1', '2026-11-24', '2026-11-26T20:20:00+09:00', 2),
+  done('c1', '2026-11-24', '2026-11-26T20:30:00+09:00', 3),
+];
+check('모두 이틀 지나 완료 → 4 × 2.5 = 10 XP + 100% 20', computeSeasonStats(lateOnly, 'c1', '2026-11-26').xp, 30);
+
+// 취소(되돌리기) → 그 항목 XP + 그날 100% 보너스까지 정확히 회수
+const revokeBase = [
+  done('c1', '2026-11-24', '2026-11-24T20:00:00+09:00', 0),
+  done('c1', '2026-11-24', '2026-11-24T20:30:00+09:00', 1),
+];
+const revoke = xpChangeForStatus(revokeBase, revokeBase[1], 'todo', { todayIso: '2026-11-25' });
+check('되돌리기 전 XP 40 (10+10+20)', revoke.before, 40);
+check('되돌리기 후 XP 10 (남은 1건만 · 100% 보너스는 사라짐)', revoke.after, 10);
+check('회수량 -30', revoke.delta, -30);
+check('항목 XP 변화 -10', revoke.itemDelta, -10);
+check('보너스 변화 -20 (100% 보너스 사라짐 · 연속 없음)', revoke.bonusDelta, -20);
+check('이번 시즌 회수', revoke.currentSeason, true);
+
+// 지연 완료한 항목을 되돌리면 깎인 만큼(5 XP)만 회수
+const revokeLate = xpChangeForStatus(
+  [done('c1', '2026-11-24', '2026-11-25T09:00:00+09:00', 0), open('c1', '2026-11-24', 1)],
+  done('c1', '2026-11-24', '2026-11-25T09:00:00+09:00', 0),
+  'todo',
+  { todayIso: '2026-11-26' },
+);
+check('지연 완료 되돌리기 → 5 XP 만 회수', revokeLate.delta, -5);
+check('지연 완료 되돌리기 → 항목 변화 -5', revokeLate.itemDelta, -5);
+
+// 연속 100% 가 끊겨 다음 날 보너스까지 회수되는 경우
+const streakBase = [
+  done('c1', '2026-11-20', '2026-11-20T20:00:00+09:00'),
+  done('c1', '2026-11-23', '2026-11-23T20:00:00+09:00'),
+  done('c1', '2026-11-24', '2026-11-24T20:00:00+09:00'),
+];
+const streakBefore = computeSeasonStats(streakBase, 'c1', '2026-11-24').xp;
+check('3일 연속 100% XP (30+30+40)', streakBefore, 100);
+const streakRevoke = xpChangeForStatus(streakBase, streakBase[1], 'todo', { todayIso: '2026-11-24' });
+check('11/23 되돌리기 → 회수 -40 (항목 10 + 100% 20 + 다음 날 연속 10)', streakRevoke.delta, -40);
+check('11/23 되돌리기 → 항목 10 · 보너스 30', [streakRevoke.itemDelta, streakRevoke.bonusDelta], [-10, -30]);
+check('11/23 되돌리기 → 연속 100% 가 3일차에서 1일차로', computeSeasonStats([streakBase[0], open('c1','2026-11-23'), streakBase[2]], 'c1', '2026-11-24').streak, 1);
+
+// 되돌린 뒤 다시 완료하면 지금 시각 기준으로 다시 셈 (오래 미뤄둔 만큼 적게)
+const redoToday = xpChangeForStatus([open('c1', '2026-11-24')], open('c1', '2026-11-24'), 'verified', {
+  completedAt: '2026-11-26T21:00:00+09:00',
+  todayIso: '2026-11-26',
+});
+check('이틀 뒤 다시 완료 → +22.5 (2.5 + 100% 20)', redoToday.delta, 22.5);
+
+// 지난 시즌(지난달) 기록에서도 회수됩니다
+const lastMonth = [done('c1', '2026-10-30', '2026-10-30T20:00:00+09:00')];
+check('지난달 항목 XP 30', computePastSeason(lastMonth, 'c1', '2026-10').xp, 30);
+const lastMonthRevoke = xpChangeForStatus(lastMonth, lastMonth[0], 'todo', { todayIso: '2026-11-26' });
+check('지난 시즌 회수 -30', lastMonthRevoke.delta, -30);
+check('지난 시즌 표시', lastMonthRevoke.currentSeason, false);
+check('지난 시즌 회수 뒤 0', lastMonthRevoke.after, 0);
+
+// 하루가 완성되지 않으면 100% 보너스 없이 항목 XP 만
+check(
+  '1/2 완료면 100% 보너스 없음',
+  computeSeasonStats([done('c1', '2026-11-24', '2026-11-24T20:00:00+09:00'), open('c1', '2026-11-24', 1)], 'c1', '2026-11-24').xp,
+  10,
+);
+
+/* ── 6. 보상 뽑기 ──────────────────────────────────────────── */
 const pool = [5, 10, 15, 20];
 const picked = new Set();
 for (let i = 0; i < 400; i += 1) picked.add(pickRewardMinutes(pool, 2));

@@ -12,7 +12,7 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from playwright.sync_api import sync_playwright, expect
 
@@ -22,6 +22,11 @@ CHROME_LIBS = '/workspace/.tools/chrome/lib'
 NODE_BIN = '/workspace/.tools/node/bin'
 PORT = 4176
 BASE = f'http://127.0.0.1:{PORT}/study-check-app/'
+
+# 샘플 숙제는 요일마다 항목 수가 달라서, 검사하는 날(수요일)을 고정합니다.
+# (브라우저 시계도 같은 시각으로 고정해 앱이 늘 같은 '오늘'을 보게 합니다.)
+FIXED_TODAY = date(2026, 11, 25)
+FIXED_NOW = datetime(2026, 11, 25, 20, 0, tzinfo=timezone(timedelta(hours=9)))
 
 failures: list[str] = []
 
@@ -80,6 +85,7 @@ def main() -> int:
             # A. 아이 화면 — 부모 전환 메뉴가 보이지 않는다
             # ---------------------------------------------------------------
             page = ctx.new_page()
+            page.clock.set_fixed_time(FIXED_NOW)
             errors: list[str] = []
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(BASE + '#as=mem_child2')
@@ -108,7 +114,7 @@ def main() -> int:
             check('아이: 되돌리기 버튼 없음', page.locator('[data-testid="revert-task"]').count() == 0)
 
             # 공부 복사 (이 날 → 내일)
-            today = date.today()
+            today = FIXED_TODAY
             tomorrow = today + timedelta(days=1)
             today_cards = page.locator('[data-testid="task-card"]').count()
             page.click('[data-testid="open-copy-day"]')
@@ -132,6 +138,7 @@ def main() -> int:
             # B. 부모 화면 — PIN 잠금
             # ---------------------------------------------------------------
             parent = ctx.new_page()
+            parent.clock.set_fixed_time(FIXED_NOW)
             parent.on('pageerror', lambda error: errors.append(str(error)))
             parent.goto(BASE + '#as=mem_dad')
             parent.wait_for_selector('[data-testid="parent-pin-gate"]')

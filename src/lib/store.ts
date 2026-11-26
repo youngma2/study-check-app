@@ -204,7 +204,8 @@ function requireTask(db: StudyDB, taskId: string): Task {
 }
 
 function replaceTask(db: StudyDB, next: Task): StudyDB {
-  return { ...db, tasks: db.tasks.map((task) => (task.id === next.id ? next : task)) };
+  const stamped: Task = { ...next, updated_at: new Date().toISOString() };
+  return { ...db, tasks: db.tasks.map((task) => (task.id === stamped.id ? stamped : task)) };
 }
 
 function assertSameFamily(actor: Member, task: Task): void {

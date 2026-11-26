@@ -16,7 +16,7 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from playwright.sync_api import sync_playwright
@@ -41,9 +41,14 @@ def check(name: str, cond: bool, extra: str = '') -> None:
         failures.append(name)
 
 
+# 샘플 숙제는 요일마다 항목 수가 달라서, 검사하는 날(수요일)을 고정합니다.
+FIXED_TODAY = date(2026, 11, 25)
+FIXED_NOW = datetime(2026, 11, 25, 20, 0, tzinfo=timezone(timedelta(hours=9)))
+
+
 def korea_today() -> date:
-    """앱은 한국 날짜로 '오늘'을 셉니다 — 검사도 같은 날짜를 씁니다."""
-    return datetime.now(ZoneInfo('Asia/Seoul')).date()
+    """앱은 한국 날짜로 '오늘'을 셉니다 — 검사도 같은(고정된) 날짜를 씁니다."""
+    return FIXED_TODAY
 
 
 def wait_for_port(port: int, timeout: float = 60.0) -> bool:
@@ -87,7 +92,7 @@ def open_profile(page) -> None:
 def goto_day(page, target: date) -> None:
     page.get_by_role('button', name='오늘', exact=True).click()
     page.wait_for_timeout(200)
-    today = date.today()
+    today = korea_today()
     current_week = today - timedelta(days=today.weekday())
     target_week = target - timedelta(days=target.weekday())
     delta = (target_week - current_week).days // 7
@@ -114,6 +119,7 @@ def main() -> int:
             )
             ctx = browser.new_context(viewport={'width': 390, 'height': 844}, locale='ko-KR', timezone_id='Asia/Seoul')
             page = ctx.new_page()
+            page.clock.set_fixed_time(FIXED_NOW)
             page.on('dialog', lambda dialog: dialog.accept())
             errors: list[str] = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -222,7 +228,8 @@ def main() -> int:
                       due_date: saturday,
                       status: 'todo',
                       created_by: 'mem_dad',
-                      created_at: new Date().toISOString(),
+                      // 고정 시계(FIXED_NOW)에서도 '방금 온 글'이 되도록 1분 뒤로 둡니다.
+                      created_at: new Date(Date.now() + 60000).toISOString(),
                       verified_by: null,
                       verified_at: null,
                     });
@@ -338,7 +345,8 @@ def main() -> int:
                       family_id: familyId,
                       author_id: 'mem_mom',
                       content: '저녁 7시에 데리러 가요',
-                      created_at: new Date().toISOString(),
+                      // 고정 시계(FIXED_NOW)에서도 '방금 온 글'이 되도록 1분 뒤로 둡니다.
+                      created_at: new Date(Date.now() + 60000).toISOString(),
                     });
                     localStorage.setItem(notesKey, JSON.stringify(notes));
                     return notes.length;
@@ -391,7 +399,8 @@ def main() -> int:
                       family_id: 'fam_demo',
                       author_id: 'mem_mom',
                       content: '우유 사다 놓을게요',
-                      created_at: new Date().toISOString(),
+                      // 앞 글을 '본 시각'보다 뒤가 되도록 2분 뒤로 둡니다(고정 시계).
+                      created_at: new Date(Date.now() + 120000).toISOString(),
                     });
                     localStorage.setItem(notesKey, JSON.stringify(notes));
                 }""",
@@ -448,12 +457,22 @@ def main() -> int:
             page.reload()
             page.wait_for_selector('[data-testid="open-profile"]')
             goto_day(page, saturday)
+            # 그 날 첫째의 '통화가 아닌' 항목 수 (샘플 주간 목록이 바뀌어도 맞도록 세어서 비교)
+            expected_cards = page.evaluate(
+                """({ dbKey, saturday }) => JSON.parse(localStorage.getItem(dbKey)).tasks.filter(
+                    (task) => task.member_id === 'mem_child1' && task.due_date === saturday
+                      && !task.title.includes('📞 통화') && !task.id.includes('_call1') && !task.id.includes('_call2'),
+                  ).length""",
+                {'dbKey': DB_KEY, 'saturday': saturday.isoformat()},
+            )
             child_main = page.inner_text('main')
             check('통화 항목: 아이 화면에는 통화 1·2 가 안 보인다',
                   '통화' not in child_main and '하교' not in child_main, child_main.replace('\n', ' / ')[:90])
-            check('통화 항목: 아이 날짜 요약에서도 빠진다', '전체 1개' in child_main, child_main.replace('\n', ' / ')[:60])
-            check('통화 항목: 아이 보드 카드도 1개만', page.locator('[data-testid="task-card"]').count() == 1,
-                  str(page.locator('[data-testid="task-card"]').count()))
+            check('통화 항목: 아이 날짜 요약에서도 빠진다', f'전체 {expected_cards}개' in child_main,
+                  child_main.replace('\n', ' / ')[:60])
+            cards = page.locator('[data-testid="task-card"]').count()
+            check(f'통화 항목: 아이 보드 카드는 통화 빼고 {expected_cards}개', cards == expected_cards,
+                  f'{expected_cards} → {cards}')
 
             open_profile(page)
             page.click('[data-testid="profile-row-mem_dad"]')

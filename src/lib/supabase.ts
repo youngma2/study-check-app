@@ -110,6 +110,7 @@ interface TaskRow {
   created_at: string;
   verified_by: string | null;
   verified_at: string | null;
+  updated_at?: string | null;
 }
 
 function toPresets(value: unknown): TaskPreset[] {
@@ -210,6 +211,7 @@ function toTask(row: TaskRow): Task {
     created_at: row.created_at,
     verified_by: row.verified_by,
     verified_at: row.verified_at,
+    updated_at: row.updated_at ?? null,
   };
 }
 

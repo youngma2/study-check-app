@@ -1,5 +1,5 @@
 import { addDays, fromISODate, koreaTodayISO, toISODate, WEEKDAY_LABELS } from './date';
-import { DIVISIONS, isStreakDay, type TierKey } from './season';
+import { DIVISIONS, formatXp, isStreakDay, isXpHiddenTask, type TierKey } from './season';
 import type { TierEvent } from './rewards';
 import type { Task } from './types';
 
@@ -7,13 +7,13 @@ import type { Task } from './types';
  * 📊 엄마·아빠 전용 통계 — 주별/월별 기간 집계.
  *
  * 화면(대시보드)과 내보내기(취합용 복사)가 같은 숫자를 쓰도록 셈은 여기서만 합니다.
- * · 📞 통화 항목은 공부 진행도에서 뺍니다(XP·티어와 같은 규칙 — season.ts 의 isHiddenTask).
+ * · 📞 통화 항목은 공부 진행도에서 뺍니다(XP·티어와 같은 규칙 — season.ts 의 isXpHiddenTask).
  * · 100% 달성(올클리어)은 그 날 할 일이 있고 전부 확인 완료된 날입니다.
  * · 연속 100%는 평일(주말·공휴일 제외)만 세고, 할 일이 없던 평일은 세지도 끊지도 않습니다.
  */
 
 function isHiddenTask(task: Task): boolean {
-  return task.title.includes('📞 통화') || task.id.includes('_call1') || task.id.includes('_call2');
+  return isXpHiddenTask(task);
 }
 
 export type ReportMode = 'week' | 'month';
@@ -294,7 +294,7 @@ export function buildExportText({ period, rows }: ExportInput): string {
     const report = row.report;
     const percent = Math.round(report.rate * 100);
     lines.push(
-      `${row.name}${row.grade ? ` (${row.grade})` : ''} · ${row.tierTitle} · ${row.xp} XP`,
+      `${row.name}${row.grade ? ` (${row.grade})` : ''} · ${row.tierTitle} · ${formatXp(row.xp)} XP`,
     );
     lines.push(`  진행도: 전체 ${report.total}개 · 확인 완료 ${report.verified}개 · 완료율 ${percent}%`);
     lines.push(

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+from datetime import datetime, timedelta, timezone
 import socket
 import subprocess
 import time
@@ -32,6 +33,9 @@ BASE = f'http://127.0.0.1:{PORT}/study-check-app/'
 
 failures: list[str] = []
 checks = 0
+
+# 테스트 데이터의 날짜(2026-11-23~25)에 맞춰 '오늘'을 고정합니다 — 시간이 지나도 같은 결과가 나옵니다.
+FIXED_NOW = datetime(2026, 11, 25, 20, 0, tzinfo=timezone(timedelta(hours=9)))
 
 
 def check(name: str, cond: bool, extra: str = '') -> None:
@@ -191,6 +195,7 @@ def run() -> int:
             parent.add_init_script(SPY)
             parent.add_init_script(INIT)
             ppage = parent.new_page()
+            ppage.clock.set_fixed_time(FIXED_NOW)
             errors: list[str] = []
             ppage.on('pageerror', lambda exc: errors.append(str(exc)))
             ppage.on('console', lambda msg: errors.append(f'console.{msg.type}: {msg.text}') if msg.type == 'error' else None)
@@ -298,6 +303,7 @@ def run() -> int:
             child.add_init_script(SPY)
             child.add_init_script(INIT)
             cpage = child.new_page()
+            cpage.clock.set_fixed_time(FIXED_NOW)
             cpage.on('pageerror', lambda exc: errors.append(str(exc)))
             cpage.goto(f'{BASE}#as=mem_yewon', wait_until='networkidle')
             cpage.wait_for_selector('[data-testid="tier-panel-mem_yewon"]', timeout=20000)

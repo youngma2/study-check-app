@@ -15,7 +15,7 @@ import {
   type Period,
   type ReportMode,
 } from '../lib/report';
-import type { TierLevel } from '../lib/season';
+import { formatXp, type TierLevel } from '../lib/season';
 import { useStudy } from '../lib/study-context';
 import type { Member } from '../lib/types';
 import { TierEmblem } from './TierBadge';
@@ -262,7 +262,7 @@ function ChildReportCard({
           </p>
           <p className="mt-0.5 flex items-center gap-1 text-[9.5px] font-bold text-slate-400">
             <TierEmblem tier={tier?.key ?? 'bronze'} division={tier?.division ?? 0} size="xs" />
-            {tier?.title ?? '브론즈 III'} · {xp} XP
+            {tier?.title ?? '브론즈 III'} · {formatXp(xp)} XP
           </p>
         </div>
         <div className="text-right">
