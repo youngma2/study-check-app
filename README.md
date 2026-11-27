@@ -476,7 +476,14 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     `verify-demo-gift.py`(28) · `verify-no-legend.py`(23) · `verify-future-lock-grade.py`
   - SQL: [`supabase/app-settings.sql`](supabase/app-settings.sql) (= `schema.sql` 9번, 여러 번 실행해도 안전) ·
     `setup.html` 자동 재생성 · 서비스 워커 캐시 `v9` → `v10`
-  - 화면: `downloads/study-night-parent.png` · `study-night-child.png`
+  - 라이브 확인: `python3 scripts/verify-live-night.py` — **12개 통과**(https://youngma2.github.io/study-check-app/ · 실제 Supabase)
+    - 서비스 워커 `study-check-shell-v10` · 라이브 번들에 ①~⑤ 코드 · `setup.html` 에 `study_set_app_settings`/`family_app_settings`
+    - 아이 화면: 옵션·타이머 버튼 없음 · 동기화 정상 · 뒤로가기 → `앱을 종료하시겠습니까?` → [취소] 면 그대로
+    - **DB 무변경**: `tasks` 498 → 498 · `family_tier_events` 9 → 9
+    - 남은 것: 라이브 DB 에 `family_app_settings` 표를 아직 만들지 않아, 앱이 읽을 때 **네트워크 404 한 줄**이 콘솔에 남습니다
+      (앱은 조용히 이 폰 저장으로 넘어가고 화면 오류는 없습니다). `supabase/app-settings.sql` 을 한 번 실행하면 사라지고,
+      그때부터 옵션·버스트 타임·타이머 기록이 가족 폰에 함께 적용됩니다.
+  - 화면: `downloads/study-night-parent.png` · `study-night-child.png` · `study-night-live-child.png`
 
 - **📅 달력 하단 상태 안내 범례 제거** (2026-11-27)
   - 왜: 달력 카드 아래 `확인 대기 · 진행 중 · 모두 완료 · 공휴일` 범례 줄이 화면을 어지럽힌다는 영민님 요청.
