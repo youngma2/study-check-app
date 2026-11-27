@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { RemoteEvent, StorageAdapter, StorageChange, StorageKind } from './storage';
 import type { Family, FamilyNote, Member, MemberColor, Role, StudyDB, Task, TaskPreset, TaskStatus } from './types';
+import { normalizeAppSettings, type AppSettings } from './app-settings';
 import { normalizeSettings, type RewardSettings, type TierEvent } from './rewards';
 import type { TierKey } from './season';
 
@@ -581,7 +582,66 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     };
   }
 
-  /** 구성원 이름 바꾸기 — 부모 + PIN. (아이디는 그대로라 링크·숙제가 유지됩니다) */
+  /* ---------------------------------------------------------------- */
+  /* ⚙️ 가족 설정 (기본 목록·버스트 타임·연속 보너스·타이머 기록)            */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * 가족 설정을 읽어 옵니다.
+   * `family_app_settings` 표가 아직 없으면(설정 전) `available:false` 를 돌려주고,
+   * 앱은 이 기기(localStorage) 값으로 계속 동작합니다 — 에러를 던지지 않습니다.
+   */
+  async loadAppSettings(familyId: string): Promise<{ available: boolean; settings: AppSettings }> {
+    const res = await this.client
+      .from('family_app_settings')
+      .select('settings')
+      .eq('family_id', familyId)
+      .limit(1)
+      .retry(false);
+    if (res.error) {
+      if (isMissingSchema(res.error)) {
+        return { available: false, settings: normalizeAppSettings(null) };
+      }
+      throw toUserError(res.error);
+    }
+    const row = ((res.data ?? []) as Array<{ settings?: unknown }>)[0];
+    return { available: true, settings: normalizeAppSettings(row?.settings) };
+  }
+
+  /** 가족 설정 저장 — 부모 + PIN 이 있어야 합니다(서버가 한 번 더 확인). */
+  async saveAppSettings(actorId: string, settings: AppSettings, pin?: string | null): Promise<AppSettings> {
+    const { data, error } = await this.client.rpc('study_set_app_settings', {
+      p_actor_id: actorId,
+      p_settings: settings,
+      p_pin: pin ?? null,
+    });
+    if (error) throw toUserError(error);
+    const payload = (data ?? {}) as { settings?: unknown };
+    return normalizeAppSettings(payload.settings ?? payload);
+  }
+
+  /** 다른 폰에서 버스트 타임을 켜거나 기본 목록을 바꾸면 바로 반영합니다. */
+  subscribeAppSettings(familyId: string, onSettings: (settings: AppSettings) => void): () => void {
+    const channel = this.client
+      .channel(`study-settings:${familyId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'family_app_settings', filter: `family_id=eq.${familyId}` },
+        (payload) => {
+          const row = payload.new as { settings?: unknown } | null;
+          if (row && 'settings' in row) onSettings(normalizeAppSettings(row.settings));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void this.client.removeChannel(channel);
+    };
+  }
+
+  /**
+   * 구성원 이름 바꾸기 — 부모 + PIN. (아이디는 그대로라 링크·숙제가 유지됩니다)
+   */
   async renameMember(actorId: string, memberId: string, name: string, pin: string): Promise<Member> {
     const { data, error } = await this.client.rpc('study_rename_member', {
       p_actor_id: actorId,

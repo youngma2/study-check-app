@@ -67,6 +67,11 @@ npm run preview  # 빌드 결과 미리보기 (http://127.0.0.1:4174)
 | 💬 우리 가족 한마디 남기기 | ✅ | ✅ |
 | 남의 한마디 지우기 | ✅ (PIN) | ❌ (내 글만) |
 | 구성원 이름 바꾸기 | ✅ (PIN) | ❌ |
+| ⚙️ 옵션 — 아이별·요일별 기본 공부 목록 · 프리셋(학기중/방학/시험기간) | ✅ (PIN) | ❌ |
+| 🔥 버스트 타임(경험치 2배) 켜기/끄기 | ✅ (PIN) | ❌ (안내 배너만 봄) |
+| ⏱ 뽑기 시간 나눠 쓰기 · 타이머 시작/일시 멈춤/재개/끝내기 | ✅ (PIN) | ❌ (남은 시간만 봄) |
+| ⑤ 연속 달성 보너스 XP 조정 | ✅ (PIN) | ❌ |
+| 📱 뒤로가기 → 앱 종료 확인 | ✅ | ✅ |
 
 상태 흐름: **할 일(todo) → 완료(verified)** — 완료를 누른 순간 `verified_at` 에 시각이 남고 카드에 `오후 8:42 완료` 로 보입니다.
 (예전 두 단계 흐름의 `pending_verification` 은 옛 데이터 호환을 위해 남아 있고, 화면에서는 '확인 대기'로 보입니다.)
@@ -93,6 +98,21 @@ RLS 는 읽기만 열고 직접 INSERT/UPDATE/DELETE 는 막아 두어, 앱을 �
   - **부모 화면은 아이마다 카드 한 장씩** 나란히: 이름·`3 / 4개`·`75%`·진행 막대(아이 색). 그날 부모 할 일이 있으면 부모 카드도 함께 붙습니다.
   - **아이 화면은 자기 카드 한 장만** 넓게 — 남매 숫자는 보이지 않습니다.
   - 이름은 언제나 `members`(DB)에서 오고, 코드에는 아이 이름이 없습니다.
+- **부모 도구 줄(부모 화면)**: `⏱ 시간 타이머` · `⚙️ 옵션` — PIN 을 푼 부모 화면에서만 보입니다.
+  - **⚙️ 옵션**: 📚 공부 목록 탭에서 아이별·요일별 기본 숙제를 직접 추가·수정·삭제하고,
+    `학기중`·`방학`·`시험기간` 프리셋을 **원터치**로 바꿉니다(프리셋마다 목록을 따로 가집니다).
+    🔥 이벤트·보너스 탭에서 버스트 타임 ON/OFF 와 ⑤ 연속 달성 보너스 XP 를 조정합니다.
+    여기서 정한 목록은 아래 [기본 목록] 버튼이 그 요일에 맞춰 그대로 넣습니다.
+  - **⏱ 시간 타이머**: 뽑기로 받은 남은 시간에서 원하는 분을 입력해 [사용 시작] 하면 그만큼 차감되고
+    카운트다운이 시작됩니다. 일시 멈춤/재개/끝내기, 시간이 다 되면 `시간이 끝났습니다!`(화면 모달 + 진동 +
+    효과음 + 브라우저 알림). 끝나는 시각을 localStorage 에 남겨 새로고침해도 이어집니다.
+  - **🔥 버스트 타임**: 켜져 있는 동안 완료·검증하는 항목 XP 가 2배(+10 → +20)가 되고, 끈 뒤에도 그때 받은
+    2배는 그대로 남습니다(켜 둔 시간대를 저장). 아이 화면 위쪽에 `🔥 버스트 타임 진행 중! 경험치 2배` 배너가 뜹니다.
+  - **⑤ 연속 달성**: 아이 카드에 `🔥 3일차` 와 함께 `🐣 쪼꼬: 첫째, 3일 연속 100% 달성! 보너스 +30 XP 🎉` 가 뜹니다.
+    3·7·14·30일 기준(부모 옵션에서 XP 조정). 일요일·공휴일과 할 일이 없던 날은 끊기지 않습니다.
+- **📱 뒤로가기**: 메인 화면에서 안드로이드 뒤로가기를 누르면 바로 닫히지 않고 `앱을 종료하시겠습니까?` 를 묻습니다.
+  [취소] 면 그대로 머물고 [종료] 때만 나갑니다. 다른 탭·모달(프로필·추가·복사·대시보드·옵션·타이머·뽑기 창)이
+  열려 있으면 뒤로가기는 **그 창부터** 닫습니다.
 - **복사 줄**: `이 날 공부 복사` · `어제 것 가져오기` — 날짜를 골라 여러 날에 한 번에 붙여넣습니다.
 - **기본 목록 줄(부모 화면)**: 날짜 요약 바로 아래 `📋 기본 목록 · 이 날 한 번에 넣기` — 한 번 누르면 그 날 아이들이
   원래 하던 공부가 `할 일`로 한꺼번에 들어갑니다.
@@ -188,6 +208,7 @@ SQL 을 실행하면 가족과 이번 주 샘플이 함께 들어가고, 아래 
 | `study_delete_note` | 💬 한마디 지우기 | 내 글은 누구나 / 남의 글은 부모 + `p_pin` |
 | `study_register_push` | 🔔 이 기기를 백그라운드 알림 대상으로 등록/갱신 | 가족이면 누구나(자기 기기) |
 | `study_delete_push` | 🔔 이 기기를 알림 대상에서 빼기 | 같은 가족의 기기만 |
+| `study_set_app_settings` | ⚙️ 가족 설정(기본 목록·프리셋·버스트 타임·연속 보너스·타이머 기록) 저장 | 부모 + `p_pin` |
 
 - `study_verify_parent_pin` 은 **틀린 횟수 제한이 없는 4자리 확인**이라, 가족 링크를 공개된 곳에 두면 안 됩니다.
   필요하면 시도 제한(lock-out)이나 더 긴 PIN 으로 바꿀 수 있습니다.
@@ -216,8 +237,16 @@ families(id text, name)
   ├ push_config(key text primary key, value text)                      ← 🔔 함수 주소·훅 비밀값·VAPID 키 (공개키 한 줄만 anon 읽기)
   ├ family_tier_events(id text, family_id, member_id, season, tier, tier_rank, level, division,
   │                    box_minutes?, created_at, opened_at?, used_at?, used_by?)  ← 🏆 승급 기록 + 🎁 상자
-  └ family_reward_settings(family_id text primary key, pool int[], notify_box, notify_step)  ← 🎁 뽑기 설정
+  ├ family_reward_settings(family_id text primary key, pool int[], notify_box, notify_step)  ← 🎁 뽑기 설정
+  └ family_app_settings(family_id text primary key, settings jsonb, updated_at)  ← ⚙️ 옵션 설정 한 줄
+                                                      (프리셋별 아이·요일별 기본 목록 · 버스트 타임 시간대 ·
+                                                       ⑤ 연속 보너스 XP · 타이머로 나눠 쓴 기록)
 ```
+
+- ⚙️ `family_app_settings` 표가 아직 없으면(SQL 실행 전) 앱은 **에러 없이 이 기기(localStorage) 설정**으로 동작하고,
+  옵션 화면에 `지금은 이 폰에만 저장돼요` 라고 알려 줍니다. 가족 폰이 같은 설정을 함께 쓰려면
+  [`supabase/app-settings.sql`](supabase/app-settings.sql)(= `schema.sql` 9번)을 한 번 실행하세요.
+  읽기는 열려 있고(아이 폰도 버스트 배너를 봐야 하므로) 쓰기는 `study_set_app_settings`(부모 + PIN)로만 합니다.
 
 - 아이디는 사람이 읽을 수 있는 text 입니다(`fam_our_home`, `mem_dad`, `t_mem_child1_2026-11-23_0`).
   그래서 링크(`#as=mem_dad`)와 시드 데이터가 그대로 맞물립니다.
@@ -349,6 +378,8 @@ src/
     RewardGiftModal.tsx   🎁 3택1 뽑기 팝업 (상자 3개·진동·Web Audio 효과음·폭죽/반짝이 연출)
     DemoGiftPage.tsx      🧪 demo.html 화면 (체험 배너·다시 뽑아보기·화면에만 남는 기록)
     ParentDashboard.tsx   📊 이번 주 요약 카드 + 주별/월별 상세 대시보드 (부모 전용)
+    OptionsPage.tsx       ⚙️ 옵션 — 아이·요일별 기본 목록 편집 · 프리셋 원터치 · 버스트 타임 · 연속 보너스
+    TimerPanel.tsx        ⏱ 뽑기 시간 나눠 쓰기 · 카운트다운 타이머 (부모 전용)
     Sheet.tsx             바텀시트 공통
     icons.tsx             인라인 SVG 아이콘
   lib/
@@ -358,6 +389,10 @@ src/
     store.ts              상태 전이·권한 검사·localStorage
     storage.ts            StorageAdapter (local | supabase), 변경 1건 단위 저장 타입
     supabase.ts           Supabase 클라이언트 · 행 매핑 · RPC 쓰기 · Realtime 구독
+    app-settings.ts       ⚙️ 가족 설정(프리셋별 기본 목록·버스트 타임·연속 보너스·타이머 기록) 정규화·저장
+    back-guard.ts         📱 뒤로가기 — 열린 창을 먼저 닫는 목록
+    timer.ts              ⏱ 타이머 상태(localStorage: ends_at · remaining_sec)
+    timer-context.tsx     ⏱ 타이머 Provider (카운트다운·일시정지·종료 알림)
     pin.ts                부모 관리 PIN (세션 보관 · 데모 모드 해시)
     defaults.ts           '기본 목록' — 같은 요일 패턴의 지난 기록으로 그 날 채우기
     notes.ts              💬 한마디 날짜(noteDate)·기기 저장·안 읽은 시각·시간 표기
@@ -390,6 +425,7 @@ scripts/verify-live-reward-dashboard.py  라이브 사이트에서 부모 대시
 scripts/verify-demo-gift.py  🧪 체험 페이지 검증 — 배너·자동 팝업·다시 뽑기·요청 0건·DB 무변경(로컬/라이브)
 scripts/verify-season.mjs  🏆 티어·XP 구간·연속 100%·⚖️ 완료 시점별 XP 차등/취소 회수 계산 검증
 scripts/verify-xp-delay-ui.py  ⚖️ XP 칩·지난 날짜 안내·완료/되돌리기 토스트와 회수 금액 검증(데모 빌드)
+scripts/verify-night-features.py  📱 뒤로가기 종료 확인 · ⏱ 타이머 · 🔥 버스트 타임 · ⚙️ 옵션/프리셋 · ⑤ 연속 보너스 검증(데모 빌드)
 scripts/verify-live-xp.py  라이브 사이트에서 XP 칩·안내·서비스 워커 v7 확인(읽기만)
 public/manifest.json      PWA 매니페스트
 public/sw.js              서비스 워커(앱 셸 캐시·오프라인 폴백·🔔 push 알림·알림 클릭 딥링크)
@@ -411,6 +447,36 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
 - 서비스 워커는 **네트워크 우선**이라 새 배포가 바로 반영되고, 네트워크가 없을 때만 캐시된 앱 셸을 씁니다.
 
 ## 8. 검증 기록
+
+- **①~⑤ 새벽 수정사항 — 뒤로가기 종료 확인 · 타이머 · 버스트 타임 · 옵션/프리셋 · 연속 보너스** (2026-11-28)
+  - ① **뒤로가기 종료 확인**: `App.tsx` 에서 히스토리 가드(`pushState` + `popstate`)를 두고, 메인 화면이면
+    `앱을 종료하시겠습니까?` 모달. [취소] 는 그대로, [종료] 때만 `history.back()` 으로 앱을 떠납니다.
+    열려 있는 창은 `back-guard.ts` 목록으로 관리해 뒤로가기가 **그 창부터** 닫습니다.
+  - ② **뽑기 시간 나눠 쓰기 + 타이머**: `TimerPanel`(부모 전용) → `timer-context` → 뽑기 남은 시간에서 분 차감
+    (`appSettings.timeUsage`) + 카운트다운. 일시 멈춤/재개/끝내기, 종료 시 모달·진동·효과음·브라우저 알림.
+    `localStorage` 에 `ends_at`·`remaining_sec` 을 남겨 새로고침해도 유지.
+  - ③ **버스트 타임**: 옵션에서 ON/OFF, 켜 둔 시간대(`burstWindows`)를 저장해 그때 완료한 항목은 끈 뒤에도 XP 2배.
+    아이 화면 상단 배너. 설정은 `family_app_settings` 로 가족 폰이 함께 쓰고, 표가 없으면 이 폰에만.
+  - ④ **옵션(공부 목록)**: 아이별·요일별 기본 목록 추가·수정·삭제, `학기중`·`방학`·`시험기간` 프리셋 원터치 전환.
+    `기본 목록` 버튼이 옵션의 목록을 먼저 쓰고, 없으면 예전처럼 지난 기록/빠른 추가로 넘어갑니다.
+  - ⑤ **연속 달성 보너스**: 3·7·14·30일 기준 보너스 XP(기본 30·70·140·300) + 🐣 쪼꼬 축하 한마디.
+    토·일·공휴일과 할 일이 없던 날은 끊기지 않습니다. XP 계산은 `season.ts`(`XpRules`)에서 하고,
+    부모 옵션에서 일수별 XP 를 바꿀 수 있습니다.
+  - 검증: `python3 scripts/verify-night-features.py` — **45개 통과**(데모 빌드 390×844)
+    - ① 뒤로가기 → 종료 확인 / 앱 유지 / [취소] / 창 먼저 닫기 / [종료] 로 떠나기
+    - ② 20분 중 7분 차감 → 13분 남음 · 07:00 카운트다운 · 새로고침 유지 · 일시 멈춤 유지 · 재개 ·
+      `시간이 끝났습니다!` 알림 · 아이 화면은 남은 시간만(조작 버튼 없음)
+    - ③ 버스트 ON/OFF·시간대 저장 · 아이 화면 배너 · 완료 토스트 `🔥 버스트 2배` · 카드 `+20 XP 🔥×2`
+    - ④ 목록 추가·수정 · 프리셋 전환(학기중↔방학) · [기본 목록]이 그 목록을 넣음
+    - ⑤ 3일 연속 = 130 XP(항목 30 + 100% 60 + 연속 10 + 보너스 30) · 주말 낀 5일 연속 = 210 XP ·
+      보너스 30→50 조정 시 150 XP · 🐣 쪼꼬 축하 한마디
+    - JS/콘솔 오류 0
+  - 기존 검증도 그대로 통과: `verify-season.mjs`(144) · `verify-xp-delay-ui.py`(25) · `verify-tier-ui.py`(40) ·
+    `verify-parent-pin.py` · `verify-dashboard.py`(34) · `verify-child-parent-defaults.py` · `verify-family-board.py` ·
+    `verify-demo-gift.py`(28) · `verify-no-legend.py`(23) · `verify-future-lock-grade.py`
+  - SQL: [`supabase/app-settings.sql`](supabase/app-settings.sql) (= `schema.sql` 9번, 여러 번 실행해도 안전) ·
+    `setup.html` 자동 재생성 · 서비스 워커 캐시 `v9` → `v10`
+  - 화면: `downloads/study-night-parent.png` · `study-night-child.png`
 
 - **📅 달력 하단 상태 안내 범례 제거** (2026-11-27)
   - 왜: 달력 카드 아래 `확인 대기 · 진행 중 · 모두 완료 · 공휴일` 범례 줄이 화면을 어지럽힌다는 영민님 요청.
@@ -496,7 +562,7 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     - 주별 일별 막대 7칸 · 월별 캘린더(30칸)+주차별 요약표 · 이전 주/다음 주·이전 달/다음 달·이번 주 돌아오기
     - `📋 취합용 복사`: 주간/월간 텍스트(진행도·연속·보너스 내역·일별 달성률·합계)가 클립보드로
   - **라이브 검증** (실제 사이트 + 실제 Supabase DB, 390×844) `python3 scripts/verify-live-reward-dashboard.py` **31개 검사 통과**
-    - 부모 PIN(2510) → 이번 주 요약 카드(실제 DB 기준 예원·찬율) → 상세 대시보드(2026.11.23–11.29, 아이 카드 2장, 0%) · 월별 2026년 11월 · 지난달 이동 · 취합용 복사
+    - 부모 PIN → 이번 주 요약 카드(실제 DB 기준 예원·찬율) → 상세 대시보드(2026.11.23–11.29, 아이 카드 2장, 0%) · 월별 2026년 11월 · 지난달 이동 · 취합용 복사
     - 아이 화면(`#as=mem_child2`)에는 요약 카드·대시보드·복사 버튼 없음 · JS 오류 0
     - 3택1 팝업은 라이브 DB 에 상자가 없어 **응답만 가짜 1건으로 바꿔**(서비스 워커 끈 창) 확인: 팝업·상자 3개·`+15분`·나머지 공개·진동 3단·효과음 26개·RPC `study_open_reward(p_event_id=ev_verify_…)` 호출·기기 저장
     - 확인 전/후 `family_tier_events` 가 **빈 상태 그대로**(DB 에 아무것도 쓰지 않음)

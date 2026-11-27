@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useOverlayBack } from '../lib/back-guard';
 import { cx } from '../lib/cx';
 import { formatShortDate, toISODate } from '../lib/date';
 import {
@@ -102,6 +103,12 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
     for (const timer of timers.current) window.clearTimeout(timer);
     timers.current = [];
   }, []);
+
+  // 📱 뒤로가기 → 상자 창만 닫기(여는 중에는 닫지 않음)
+  useOverlayBack(true, () => {
+    if (stage === 'opening') return;
+    onClose();
+  });
 
   useEffect(() => {
     alive.current = true;

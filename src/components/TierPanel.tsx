@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { reachedStreakBonus, nextStreakBonus } from '../lib/app-settings';
 import { cx } from '../lib/cx';
 import { formatShortDate, toISODate } from '../lib/date';
 import type { TierEvent } from '../lib/rewards';
@@ -30,6 +31,9 @@ export function TierPanel({ member }: { member: Member }) {
     .filter((event) => event.season === stats.season && event.box_minutes !== null)
     .reverse();
   const unopened = boxes.filter((box) => !box.opened_at).length;
+  /** ⑤ 연속 달성 — 지금까지 채운 기준·다음 기준 */
+  const streakReached = reachedStreakBonus(stats.streak, study.appSettings.streakBonuses);
+  const streakNext = nextStreakBonus(stats.streak, study.appSettings.streakBonuses);
 
   return (
     <div
@@ -95,6 +99,22 @@ export function TierPanel({ member }: { member: Member }) {
             </p>
             <p>↺ 되돌리면 그 XP 와 그날 100% 보너스까지 회수</p>
           </div>
+
+          {/* ⑤ 연속 달성 보너스 — 🐣 쪼꼬가 축하 한마디를 남깁니다. */}
+          {streakReached ? (
+            <div
+              data-testid={`streak-congrats-${member.id}`}
+              className="mt-1.5 rounded-xl bg-orange-50 px-2 py-1.5 text-[9.5px] font-extrabold leading-relaxed text-orange-700 ring-1 ring-orange-200/80"
+            >
+              🐣 쪼꼬: {member.name}, <b className="font-extrabold">{streakReached.day}일 연속</b> 100% 달성!
+              보너스 +{formatXp(streakReached.xp)} XP 🎉
+            </div>
+          ) : streakNext ? (
+            <p data-testid={`streak-next-${member.id}`} className="mt-1 text-[9px] font-bold text-slate-400">
+              🎁 {streakNext.day}일 연속까지 {streakNext.day - stats.streak}일 · 보너스 +
+              {formatXp(streakNext.xp)} XP
+            </p>
+          ) : null}
         </div>
       </div>
 

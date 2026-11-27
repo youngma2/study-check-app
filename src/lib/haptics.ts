@@ -6,6 +6,10 @@
 
 function vibrate(pattern: number | number[]): void {
   if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
+  // 사용자가 화면을 한 번도 누르지 않은 상태(새로고침 직후 알림 등)에서는 브라우저가
+  // 진동을 막고 콘솔에 경고를 남깁니다. 그런 경우는 조용히 건너뜁니다.
+  const activation = (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } }).userActivation;
+  if (activation && !activation.hasBeenActive) return;
   try {
     navigator.vibrate(pattern);
   } catch {
@@ -45,4 +49,23 @@ export function vibrateRewardWin(): void {
 /** 안 고른 상자를 살짝 보여 줄 때의 아주 작은 톡. */
 export function vibrateRewardPeek(): void {
   vibrate(10);
+}
+
+/* ------------------------------------------------------------------ */
+/* ⏱ 타이머                                                            */
+/* ------------------------------------------------------------------ */
+
+/** 시간이 다 됐을 때 — 길게 세 번. */
+export function vibrateTimerEnd(): void {
+  vibrate([300, 120, 300, 120, 500]);
+}
+
+/** 일시 멈춤·재개를 눌렀을 때의 톡. */
+export function vibrateTimerToggle(): void {
+  vibrate(20);
+}
+
+/** 새 한마디 알림이 올 때의 짧은 진동(사용자가 이미 화면을 만진 뒤에만). */
+export function vibrateNoteAlert(): void {
+  vibrate([150, 80, 150]);
 }

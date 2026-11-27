@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import { StudyProvider } from './lib/study-context';
+import { TimerProvider } from './lib/timer-context';
 import './index.css';
 
 const container = document.getElementById('root');
@@ -10,7 +11,9 @@ if (!container) throw new Error('#root 를 찾을 수 없어요.');
 createRoot(container).render(
   <StrictMode>
     <StudyProvider>
-      <App />
+      <TimerProvider>
+        <App />
+      </TimerProvider>
     </StudyProvider>
   </StrictMode>,
 );

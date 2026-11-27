@@ -46,3 +46,32 @@ export function playNoteChime(): void {
     /* 소리는 실패해도 화면 알림은 그대로 */
   }
 }
+
+/**
+ * ⏱ 타이머가 끝났을 때 — 또렷한 세 번 종소리.
+ * (화면 모달·진동과 함께 울립니다. 브라우저가 막으면 조용히 넘어갑니다)
+ */
+export function playTimerAlarm(): void {
+  const ctx = context();
+  if (!ctx) return;
+
+  try {
+    if (ctx.state === 'suspended') void ctx.resume();
+    const now = ctx.currentTime;
+    [784, 987.77, 1174.66].forEach((frequency, index) => {
+      const start = now + index * 0.28;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = frequency;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.16, start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.55);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.6);
+    });
+  } catch {
+    /* 소리는 실패해도 화면 알림은 그대로 */
+  }
+}

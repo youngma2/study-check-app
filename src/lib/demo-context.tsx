@@ -7,6 +7,7 @@ import {
 } from './study-context';
 import { createDemoDB, sortTasks, summarize } from './store';
 import { DEFAULT_REWARD_SETTINGS, type RewardSettings } from './rewards';
+import { defaultAppSettings } from './app-settings';
 
 /**
  * 🧪 체험 페이지(demo.html) 전용 컨텍스트.
@@ -77,6 +78,12 @@ export function DemoStudyProvider({
       openReward,
       useReward,
       saveRewardSettings: ok,
+      appSettings: defaultAppSettings(),
+      settingsSync: 'local',
+      saveAppSettings: async () => ({ ok: true, localOnly: true }),
+      consumeBonusTime: async () => ({ ok: false, error: '체험 화면에서는 쓸 수 없어요.' }),
+      xpRules: {},
+      burstActive: false,
       tasksFor,
       summaryFor: (memberId: string, dateIso: string) => summarize(tasksFor(memberId, dateIso)),
       addTask: ok,

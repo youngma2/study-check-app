@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { usedBonusMinutes } from '../lib/app-settings';
 import { cx } from '../lib/cx';
 import { fromISODate, koreaTodayISO, WEEKDAY_LABELS } from '../lib/date';
 import { displayGrade } from '../lib/grade';
@@ -47,12 +48,16 @@ function useReports(period: Period) {
       study.children.map((member) => ({
         member,
         report: computeMemberReport(study.db.tasks, study.tierEvents, member.id, period, today),
-        unusedAll: unusedBonusMinutes(study.tierEvents, member.id),
+        unusedAll: Math.max(
+          0,
+          unusedBonusMinutes(study.tierEvents, member.id) -
+            usedBonusMinutes(study.appSettings, member.id),
+        ),
         tier: study.seasonStatsFor(member.id)?.level ?? null,
         xp: study.seasonStatsFor(member.id)?.xp ?? 0,
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [study.db.tasks, study.tierEvents, study.children, period.start, period.end, today],
+    [study.db.tasks, study.tierEvents, study.children, study.appSettings, period.start, period.end, today],
   );
 }
 

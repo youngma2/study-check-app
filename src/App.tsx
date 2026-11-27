@@ -7,17 +7,24 @@ import { DayOverview } from './components/DayOverview';
 import { FamilyNotesBoard } from './components/FamilyNotesBoard';
 import { ParentDashboard, ParentWeekSummary } from './components/ParentDashboard';
 import { ParentPinGate } from './components/ParentPinGate';
+import { OptionsPage } from './components/OptionsPage';
+import { TimerPanel } from './components/TimerPanel';
 import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
 import { CopyIcon, LockIcon, PlusIcon, UndoIcon, XIcon } from './components/icons';
+import { streakBonusXp, routinesForMember } from './lib/app-settings';
+import { closeTopOverlay, useOverlayBack } from './lib/back-guard';
 import { playNoteChime } from './lib/chime';
-import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
+import { vibrateNoteAlert } from './lib/haptics';
+import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, koreaTodayISO, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { defaultItemsForDay } from './lib/defaults';
 import { deepLinkDate } from './lib/deeplink';
 import { JJOKKO_EMOJI, formatNoteTime, noteAuthorName, noteBody, noteDate } from './lib/notes';
 import { summarize } from './lib/store';
 import { formatXp, xpChangeForStatus } from './lib/season';
 import { useStudy, type ActionResult } from './lib/study-context';
+import { useTimer } from './lib/timer-context';
+import { streakThrough } from './lib/report';
 import type { NewTaskInput, Task } from './lib/types';
 
 /**
@@ -27,6 +34,47 @@ import type { NewTaskInput, Task } from './lib/types';
  */
 function isCallTask(task: Task): boolean {
   return task.title.includes('📞 통화') || task.id.includes('_call1') || task.id.includes('_call2');
+}
+
+/** 📱 뒤로가기로 앱을 닫으려 할 때 뜨는 확인 — 메인 화면과 부모 PIN 화면 양쪽에서 씁니다. */
+function ExitConfirmDialog({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div
+      data-testid="exit-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="앱을 종료하시겠습니까?"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 px-6 backdrop-blur-sm"
+    >
+      <div className="animate-gift-in w-full max-w-[300px] rounded-[26px] bg-white p-5 text-center shadow-2xl">
+        <p className="text-[30px] leading-none" aria-hidden>
+          📚
+        </p>
+        <h2 className="mt-2 text-[15.5px] font-extrabold tracking-tight text-slate-900">앱을 종료하시겠습니까?</h2>
+        <p className="mt-1 text-[10.5px] font-semibold leading-relaxed text-slate-500">
+          공부 기록은 그대로 저장돼 있어요.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            data-testid="exit-cancel"
+            onClick={onCancel}
+            className="flex-1 rounded-2xl bg-slate-100 py-2.5 text-[12px] font-extrabold text-slate-600 transition active:scale-[0.98]"
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            data-testid="exit-confirm-ok"
+            onClick={onConfirm}
+            className="flex-1 rounded-2xl bg-slate-900 py-2.5 text-[12px] font-extrabold text-white transition active:scale-[0.98]"
+          >
+            종료
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -76,6 +124,13 @@ export default function App() {
   const [parentGateTarget, setParentGateTarget] = useState<string | null>(null);
   /** 📊 부모 전용 상세 대시보드 */
   const [dashboardOpen, setDashboardOpen] = useState(false);
+  /** ⚙️ 부모 전용 옵션(기본 공부 목록·버스트 타임·연속 보너스) */
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  /** ⏱ 부모 전용 시간 타이머 */
+  const [timerOpen, setTimerOpen] = useState(false);
+  /** 📱 뒤로가기로 앱을 닫으려 할 때 띄우는 확인 */
+  const [exitOpen, setExitOpen] = useState(false);
+  const timer = useTimer();
   const [fillingDefaults, setFillingDefaults] = useState(false);
   const fillingDefaultsRef = useRef(false);
   /** 브라우저 알림 권한 ('unsupported' = 이 브라우저에 알림 기능 없음) */
@@ -90,6 +145,74 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  /* ---------------------------------------------------------------- */
+  /* 📱 안드로이드 뒤로가기 — 창을 먼저 닫고, 메인 화면이면 종료 확인       */
+  /* ---------------------------------------------------------------- */
+
+  const exitOpenRef = useRef(false);
+  exitOpenRef.current = exitOpen;
+  const popHandlerRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    /** 뒤로가기가 앱을 닫지 않고 우리가 잡을 수 있도록 기록을 하나 쌓아 둔다. */
+    const pushGuard = () => {
+      try {
+        window.history.pushState({ studyGuard: Date.now() }, '');
+      } catch {
+        /* 히스토리를 못 쓰는 환경(샌드박스·file://)에서는 그냥 두기 */
+      }
+    };
+
+    pushGuard();
+
+    const onPop = () => {
+      // 1) 열려 있는 탭·모달이 있으면 그것만 먼저 닫는다.
+      if (closeTopOverlay()) {
+        pushGuard();
+        return;
+      }
+      // 2) 종료 확인이 떠 있으면 다시 누를 때는 확인을 닫는다(취소).
+      if (exitOpenRef.current) {
+        setExitOpen(false);
+        pushGuard();
+        return;
+      }
+      // 3) 메인 화면 — 「앱을 종료하시겠습니까?」
+      setExitOpen(true);
+      pushGuard();
+    };
+
+    popHandlerRef.current = onPop;
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      popHandlerRef.current = null;
+    };
+  }, []);
+
+  /** [종료] 를 누르면 그때만 앱을 떠납니다(가드로 쌓은 기록을 되돌리고 한 번 더 나감). */
+  const confirmExit = () => {
+    setExitOpen(false);
+    const handler = popHandlerRef.current;
+    if (handler) window.removeEventListener('popstate', handler);
+    popHandlerRef.current = null;
+    try {
+      window.close();
+    } catch {
+      /* 설치형 앱이 아니면 close 는 막혀 있을 수 있습니다. */
+    }
+    window.history.back();
+    window.setTimeout(() => window.history.back(), 160);
+  };
+
+  useOverlayBack(profileOpen, () => setProfileOpen(false));
+  useOverlayBack(formOpen, () => setFormOpen(false));
+  useOverlayBack(copySources !== null, () => setCopySources(null));
+  useOverlayBack(dashboardOpen, () => setDashboardOpen(false));
+  useOverlayBack(exitOpen, () => setExitOpen(false));
 
   const latestUnseen = unseenNotes[0] ?? null;
   /** 자동 알림(티어 승급·부재중 전화 등)은 '쪼꼬' 로 보여 줍니다(supabase/notes-jjokko.sql). */
@@ -127,11 +250,7 @@ export default function App() {
         badge: `${import.meta.env.BASE_URL}badge-96.png?v=4`,
         tag: `study-note-${latestUnseen.id}`,
       };
-      try {
-        navigator.vibrate?.([150, 80, 150]);
-      } catch {
-        /* 진동이 없는 기기 */
-      }
+      vibrateNoteAlert();
 
       void (async () => {
         // 안드로이드 크롬은 new Notification() 을 막습니다("Illegal constructor").
@@ -316,22 +435,40 @@ export default function App() {
   /** 완료 체크 — 누르는 순간 완료로 기록되고, 그 시각이 카드에 남습니다.
    *  아직 오지 않은 날짜의 공부는 그날이 되기 전까지 완료할 수 없습니다(버튼도 잠겨 있어요).
    *  ⚖️ 받는 XP 는 그 날(항목 날짜)에 했는지로 정해집니다 — 당일 100% · 하루 지남 50% · 이틀 이상 25%. */
+  /** ⑤ 완료로 연속 일수가 보너스 기준(3·7·14·30일)에 닿았는지 — 쪼꼬 축하 한마디에 씁니다. */
+  const milestoneOnComplete = (task: Task, completedAt: string) => {
+    const known = study.db.tasks.some((item) => item.id === task.id);
+    const nextTasks = known
+      ? study.db.tasks.map((item) =>
+          item.id === task.id ? { ...item, status: 'verified' as const, verified_at: completedAt } : item,
+        )
+      : [...study.db.tasks, { ...task, status: 'verified' as const, verified_at: completedAt }];
+    const streak = streakThrough(nextTasks, task.member_id, koreaTodayISO());
+    const xp = streakBonusXp(streak, study.appSettings.streakBonuses);
+    return xp > 0 ? { streak, xp } : null;
+  };
+
   const handleComplete = async (task: Task) => {
     if (isFutureDate(task.due_date)) {
       notify('아직 날짜가 되지 않았어요 · 그날이 되면 완료할 수 있어요');
       return;
     }
     const completedAt = new Date().toISOString();
-    const change = xpChangeForStatus(study.db.tasks, task, 'verified', { completedAt });
+    const change = xpChangeForStatus(study.db.tasks, task, 'verified', { completedAt, rules: study.xpRules });
+    const milestone = milestoneOnComplete(task, completedAt);
     const result = await setStatus(task.id, 'verified');
     if (result.ok) {
       const time = formatTimeKo(completedAt);
       const parts = [`완료! ${time}`];
       if (change.itemDelta > 0) {
         parts.push(`+${formatXp(change.itemDelta)} XP`);
-        if (change.item.percent < 100) parts.push(change.item.label);
+        if (change.item.burst) parts.push('🔥 버스트 2배');
+        else if (change.item.percent < 100) parts.push(change.item.label);
       }
-      if (change.bonusDelta > 0) parts.push(`100% 보너스 +${formatXp(change.bonusDelta)}`);
+      // ⑤ 연속 달성 보너스는 🐣 쪼꼬 한마디로 따로 알리고, 나머지(100%·연속)만 여기에 적습니다.
+      const plainBonus = Math.max(0, Math.round((change.bonusDelta - (milestone?.xp ?? 0)) * 10) / 10);
+      if (plainBonus > 0) parts.push(`100% 보너스 +${formatXp(plainBonus)}`);
+      if (milestone) parts.push(`🐣 쪼꼬: ${milestone.streak}일 연속 달성! +${formatXp(milestone.xp)} XP`);
       notify(parts.join(' · '));
       return;
     }
@@ -340,7 +477,7 @@ export default function App() {
 
   /** 완료 되돌리기 — 그 항목 XP 와 그날 100%·연속 보너스까지 정확히 회수됩니다. */
   const handleRevert = async (task: Task) => {
-    const change = xpChangeForStatus(study.db.tasks, task, 'todo');
+    const change = xpChangeForStatus(study.db.tasks, task, 'todo', { rules: study.xpRules });
     const result = await setStatus(task.id, 'todo');
     if (!result.ok) {
       notify(result.error ?? '되돌리지 못했어요');
@@ -416,7 +553,8 @@ export default function App() {
     let firstError: string | undefined;
     try {
       for (const member of visibleMembers) {
-        for (const item of defaultItemsForDay(study.db.tasks, member, selectedDate)) {
+        const routines = routinesForMember(study.appSettings, member.id);
+        for (const item of defaultItemsForDay(study.db.tasks, member, selectedDate, routines)) {
           const result = await addTask({
             member_id: member.id,
             title: item.title,
@@ -498,6 +636,7 @@ export default function App() {
           }}
           onCancel={parentGateReturnTo ? cancelParentGate : undefined}
         />
+        {exitOpen ? <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={confirmExit} /> : null}
         {toast ? (
           <div className="pointer-events-none fixed inset-x-0 bottom-8 z-40 flex justify-center px-6">
             <div className="animate-toast-in max-w-full truncate rounded-full bg-slate-900/90 px-4 py-2.5 text-[11.5px] font-bold text-white shadow-lg">
@@ -520,6 +659,60 @@ export default function App() {
       />
 
       <main className="mx-auto w-full max-w-md px-4 pb-36 pt-3">
+        {/* 🔥 버스트 타임 안내 — 켜져 있는 동안 모든 아이 화면 위에 뜽니다. */}
+        {study.burstActive ? (
+          <div
+            data-testid="burst-banner"
+            className="mb-3 flex items-center gap-2 rounded-[18px] bg-gradient-to-r from-orange-500 to-amber-500 px-3 py-2 text-white shadow-lg shadow-orange-500/25"
+          >
+            <span aria-hidden className="animate-box-idle text-[16px]">
+              🔥
+            </span>
+            <p className="text-[11.5px] font-extrabold leading-tight">
+              버스트 타임 진행 중!
+              <span className="ml-1 font-bold text-white/80">경험치 2배</span>
+            </p>
+          </div>
+        ) : null}
+
+        {/* ⏱ 돌고 있는 타이머 — 아이 화면에서는 남은 시간만, 조작은 부모만 */}
+        {timer.session && timer.session.status !== 'done' ? (
+          <div
+            data-testid="timer-strip"
+            className="mb-3 flex items-center gap-2 rounded-[18px] bg-slate-900 px-3 py-2 text-white shadow-lg"
+          >
+            <span aria-hidden className="text-[15px]">
+              ⏱
+            </span>
+            <span className="min-w-0 truncate text-[11px] font-extrabold">{timer.session.member_name}</span>
+            <span data-testid="timer-strip-clock" className="shrink-0 text-[15px] font-extrabold tabular-nums">
+              {timer.clock}
+            </span>
+            {timer.session.status === 'paused' ? (
+              <span className="shrink-0 text-[9px] font-bold text-white/60">일시 멈춤</span>
+            ) : null}
+            {isParent ? (
+              <div className="ml-auto flex shrink-0 gap-1">
+                <button
+                  type="button"
+                  data-testid="timer-strip-toggle"
+                  onClick={timer.session?.status === 'paused' ? timer.resume : timer.pause}
+                  className="rounded-full bg-white/15 px-2 py-1 text-[9.5px] font-extrabold transition active:scale-95"
+                >
+                  {timer.session.status === 'paused' ? '▶ 재개' : '⏸ 멈춤'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTimerOpen(true)}
+                  className="rounded-full bg-white/15 px-2 py-1 text-[9.5px] font-extrabold transition active:scale-95"
+                >
+                  관리
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {latestUnseen ? (
           <div
             data-testid="family-note-alert"
@@ -586,6 +779,30 @@ export default function App() {
 
         {/* 📊 엄마·아빠 전용 — 이번 주 간단 요약(누르면 상세 대시보드). 아이 화면에는 없습니다. */}
         {isParent ? <ParentWeekSummary onOpen={() => setDashboardOpen(true)} /> : null}
+
+        {/* ⚙️ 엄마·아빠 전용 도구 — 시간 타이머 · 옵션 */}
+        {isParent ? (
+          <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+            <button
+              type="button"
+              data-testid="open-timer"
+              onClick={() => setTimerOpen(true)}
+              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2.5 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+            >
+              <span className="text-[11.5px] font-extrabold text-slate-800">⏱ 시간 타이머</span>
+              <span className="text-[9px] font-bold text-slate-400">뽑기 시간 나눠 쓰기</span>
+            </button>
+            <button
+              type="button"
+              data-testid="open-options"
+              onClick={() => setOptionsOpen(true)}
+              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2.5 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+            >
+              <span className="text-[11.5px] font-extrabold text-slate-800">⚙️ 옵션</span>
+              <span className="text-[9px] font-bold text-slate-400">공부 목록 · 이벤트</span>
+            </button>
+          </div>
+        ) : null}
 
         {isParent ? (
           <button
@@ -780,6 +997,13 @@ export default function App() {
       />
 
       {isParent && dashboardOpen ? <ParentDashboard onClose={() => setDashboardOpen(false)} /> : null}
+      {isParent && optionsOpen ? (
+        <OptionsPage onClose={() => setOptionsOpen(false)} onNotify={notify} />
+      ) : null}
+      {isParent && timerOpen ? <TimerPanel onClose={() => setTimerOpen(false)} onNotify={notify} /> : null}
+
+      {/* 📱 뒤로가기 — 메인 화면에서만 「앱을 종료하시겠습니까?」 */}
+      {exitOpen ? <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={confirmExit} /> : null}
 
       {toast ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-24 z-40 flex justify-center px-6">

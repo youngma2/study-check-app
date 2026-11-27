@@ -160,9 +160,20 @@ window.__audioStarts = 0;
 """
 
 SEED = json.dumps(build_db(), ensure_ascii=False)
+# 이 검사는 티어·엠블럼 UI 만 봅니다 — ⑤ 연속 달성 보너스가 섞이지 않게 보너스를 비워 둡니다.
+SETTINGS = json.dumps({
+    'version': 1,
+    'burst': False,
+    'burstWindows': [],
+    'streakBonuses': [],
+    'activePreset': 'semester',
+    'presets': {},
+    'timeUsage': [],
+}, ensure_ascii=False)
 INIT = f"""
 window.localStorage.setItem('study-check.db.v1', {json.dumps(SEED)});
 window.localStorage.setItem('study-check.member.v1', 'mem_yewon');
+window.localStorage.setItem('study-check.app-settings.v1', {json.dumps(SETTINGS)});
 """
 
 

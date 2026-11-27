@@ -14,7 +14,7 @@
  */
 
 import { fromISODate } from './date';
-import type { Member, Task } from './types';
+import type { Member, Task, TaskPreset } from './types';
 
 /** 요일 패턴에 따라 다시 넣지 않는 항목 (격주로 하는 것) — 제목에 이 말이 들어가면 건너뜁니다. */
 const BIWEEKLY_HINTS = ['상담'];
@@ -44,14 +44,29 @@ function isBiweekly(title: string): boolean {
 /**
  * 그 아이의 지난 기록에서 같은 요일 패턴의 가장 최근 하루 항목을 고릅니다.
  * (대상 날짜에 이미 있는 항목은 빼고 돌려줍니다)
+ *
+ * ⚙️ 옵션에서 그 아이·그 요일의 '기본 공부 목록'을 정해 두었으면 그것을 먼저 씁니다(④).
+ *    정해 둔 목록이 없을 때만 지난 기록·빠른 추가 항목으로 넘어갑니다.
  */
-export function defaultItemsForDay(tasks: Task[], member: Member, targetIso: string): DefaultListItem[] {
+export function defaultItemsForDay(
+  tasks: Task[],
+  member: Member,
+  targetIso: string,
+  routines?: Record<string, TaskPreset[]>,
+): DefaultListItem[] {
   const pattern = patternDaysFor(targetIso);
   const mine = tasks.filter((task) => task.member_id === member.id);
 
   const taken = new Set(
     mine.filter((task) => task.due_date === targetIso).map((task) => keyOf(task)),
   );
+
+  const routine = routines?.[String(fromISODate(targetIso).getDay())] ?? [];
+  if (routine.length > 0) {
+    return routine
+      .map((item) => ({ title: item.title, subject: item.subject }))
+      .filter((item) => !taken.has(keyOf(item)));
+  }
 
   const picked: DefaultListItem[] = [];
   const seen = new Set<string>();

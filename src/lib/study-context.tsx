@@ -47,12 +47,22 @@ import { enablePushNotifications, syncPushRegistration } from './push';
 import { StorageSetupError, createSupabaseAdapter, type NotesRemoteEvent } from './supabase';
 import { koreaTodayISO } from './date';
 import {
+  addTimeUsage,
+  loadLocalAppSettings,
+  normalizeAppSettings,
+  remainingBonusMinutes,
+  saveLocalAppSettings,
+  type AppSettings,
+} from './app-settings';
+import { unusedBonusMinutes } from './report';
+import {
   computePastSeason,
   computeSeasonStats,
   previousSeason,
   seasonOf,
   type SeasonStats,
   type TierLevel,
+  type XpRules,
 } from './season';
 import {
   DEFAULT_REWARD_SETTINGS,
@@ -125,6 +135,17 @@ export interface StudyContextValue {
   openReward: (eventId: string) => Promise<ActionResult>;
   useReward: (eventId: string) => Promise<ActionResult>;
   saveRewardSettings: (patch: Partial<RewardSettings>) => Promise<ActionResult>;
+  /** ⚙️ 부모 옵션 — 기본 공부 목록 · 🔥 버스트 타임 · ⑤ 연속 보너스 · 타이머 기록 */
+  appSettings: AppSettings;
+  /** 'cloud' = 가족 폰이 함께 씀 / 'local' = 이 기기에만(SQL 실행 전) */
+  settingsSync: 'cloud' | 'local';
+  saveAppSettings: (patch: Partial<AppSettings>) => Promise<ActionResult & { localOnly?: boolean }>;
+  /** ② 뽑기로 받은 시간에서 분을 차감하고 타이머를 시작할 때 (부모 전용) */
+  consumeBonusTime: (memberId: string, minutes: number) => Promise<ActionResult>;
+  /** XP 계산 규칙(버스트 타임·연속 보너스) */
+  xpRules: XpRules;
+  /** 🔥 버스트 타임이 지금 켜져 있는지 */
+  burstActive: boolean;
   tasksFor: (memberId: string, dateIso: string) => Task[];
   summaryFor: (memberId: string, dateIso: string) => TaskSummary;
   addTask: (input: NewTaskInput) => Promise<ActionResult>;
@@ -464,6 +485,29 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   const rewardSettingsRef = useRef<RewardSettings>(rewardSettings);
   rewardSettingsRef.current = rewardSettings;
 
+  /* ---------------------------------------------------------------- */
+  /* ⚙️ 부모 옵션 설정 (기본 목록·버스트 타임·연속 보너스·타이머 기록)          */
+  /* ---------------------------------------------------------------- */
+
+  const [appSettings, setAppSettingsState] = useState<AppSettings>(() => loadLocalAppSettings());
+  const appSettingsRef = useRef<AppSettings>(appSettings);
+  appSettingsRef.current = appSettings;
+  /** 'cloud' 면 가족 폰이 같은 설정을 쓰고, 'local' 이면 이 폰에만 저장합니다. */
+  const [settingsSync, setSettingsSync] = useState<'cloud' | 'local'>('local');
+  const settingsSyncRef = useRef<'cloud' | 'local'>('local');
+  settingsSyncRef.current = settingsSync;
+
+  const applyAppSettings = useCallback((next: AppSettings) => {
+    appSettingsRef.current = next;
+    setAppSettingsState(next);
+    saveLocalAppSettings(next);
+  }, []);
+
+  const xpRules = useMemo<XpRules>(
+    () => ({ burstWindows: appSettings.burstWindows, streakBonuses: appSettings.streakBonuses }),
+    [appSettings.burstWindows, appSettings.streakBonuses],
+  );
+
   const applyTierEvents = useCallback(
     (next: TierEvent[]) => {
       tierEventsRef.current = next;
@@ -542,16 +586,115 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     });
   }, [cloud, mode, syncState, tierEventsState]);
 
+  // 가족 설정(⚙️)을 불러옵니다 — 표가 아직 없으면(SQL 전) 이 폰 저장으로 계속 동작합니다.
+  useEffect(() => {
+    if (!cloud) return;
+    if (mode !== 'supabase' || syncState !== 'synced') return;
+    const familyId = dbRef.current.families[0]?.id;
+    if (!familyId) return;
+    let alive = true;
+    cloud
+      .loadAppSettings(familyId)
+      .then(({ available, settings }) => {
+        if (!alive) return;
+        if (!available) {
+          setSettingsSync('local');
+          return;
+        }
+        applyAppSettings(settings);
+        setSettingsSync('cloud');
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        console.warn('[study-check] 가족 설정 불러오기 실패 — 이 폰 설정으로 계속합니다', error);
+        setSettingsSync('local');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [cloud, mode, syncState, applyAppSettings]);
+
+  // 다른 폰에서 버스트 타임을 켜거나 기본 목록을 바꾸면 바로 반영합니다.
+  useEffect(() => {
+    if (!cloud || mode !== 'supabase' || syncState !== 'synced' || settingsSync !== 'cloud') return;
+    const familyId = dbRef.current.families[0]?.id;
+    if (!familyId) return;
+    return cloud.subscribeAppSettings(familyId, (settings) => applyAppSettings(settings));
+  }, [cloud, mode, syncState, settingsSync, applyAppSettings]);
+
+  /** ⚙️ 부모 옵션 저장 — 가족 DB 가 있으면 모든 폰에, 없으면 이 폰에만 저장합니다. */
+  const saveAppSettings = useCallback(
+    async (patch: Partial<AppSettings>): Promise<ActionResult & { localOnly?: boolean }> => {
+      const current = appSettingsRef.current;
+      const next = normalizeAppSettings({ ...current, ...patch });
+      const db = dbRef.current;
+      const actor =
+        db.members.find((member) => member.id === currentMemberIdRef.current) ?? db.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+      if (actor.role !== 'parent') return { ok: false, error: '옵션은 부모님만 바꿀 수 있어요.' };
+
+      if (cloud && modeRef.current === 'supabase') {
+        const pin = sessionPinRef.current;
+        if (!pin) return { ok: false, error: '부모 관리 PIN 잠금을 먼저 풀어 주세요.' };
+        try {
+          const saved = await cloud.saveAppSettings(actor.id, next, pin);
+          applyAppSettings(saved);
+          setSettingsSync('cloud');
+          return { ok: true };
+        } catch (error) {
+          if (error instanceof StorageSetupError) {
+            // 아직 표(SQL)가 없는 DB — 에러 없이 이 폰에만 적용하고 그렇게 알려 줍니다.
+            applyAppSettings(next);
+            setSettingsSync('local');
+            return { ok: true, localOnly: true };
+          }
+          return { ok: false, error: messageOf(error) };
+        }
+      }
+
+      applyAppSettings(next);
+      return { ok: true, localOnly: cloud !== null ? true : undefined };
+    },
+    [applyAppSettings, cloud],
+  );
+
+  /** ② 뽑기로 받은 시간에서 분을 나눠 씁니다(부모 전용). */
+  const consumeBonusTime = useCallback(
+    async (memberId: string, minutes: number): Promise<ActionResult> => {
+      const db = dbRef.current;
+      const actor =
+        db.members.find((member) => member.id === currentMemberIdRef.current) ?? db.members[0];
+      if (!actor || actor.role !== 'parent') {
+        return { ok: false, error: '부모 화면에서만 시간을 쓸 수 있어요.' };
+      }
+      const wanted = Math.round(minutes);
+      if (!Number.isFinite(wanted) || wanted < 1) return { ok: false, error: '1분 이상 입력해 주세요.' };
+
+      const remaining = remainingBonusMinutes(
+        appSettingsRef.current,
+        memberId,
+        unusedBonusMinutes(tierEventsRef.current, memberId),
+      );
+      if (wanted > remaining) {
+        return { ok: false, error: `뽑기로 받은 남은 시간은 ${remaining}분이에요.` };
+      }
+
+      const next = addTimeUsage(appSettingsRef.current, memberId, wanted);
+      return saveAppSettings({ timeUsage: next.timeUsage });
+    },
+    [saveAppSettings],
+  );
+
   /** 이번 달(오늘까지) 아이별 시즌 기록 — 공부 목록이 바뀌면 같이 다시 셈합니다. */
   const seasonStats = useMemo(() => {
     const map: Record<string, SeasonStats> = {};
     const today = koreaTodayISO();
     for (const member of db.members) {
       if (member.role !== 'child') continue;
-      map[member.id] = computeSeasonStats(db.tasks, member.id, today);
+      map[member.id] = computeSeasonStats(db.tasks, member.id, today, xpRules);
     }
     return map;
-  }, [db]);
+  }, [db, xpRules]);
 
   /** 지난달 최고 기록 — 배지로만 보여 줍니다. */
   const lastSeasonStats = useMemo(() => {
@@ -559,11 +702,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     const season = previousSeason(seasonOf(koreaTodayISO()));
     for (const member of db.members) {
       if (member.role !== 'child') continue;
-      const past = computePastSeason(db.tasks, member.id, season);
+      const past = computePastSeason(db.tasks, member.id, season, xpRules);
       if (past.xp > 0) map[member.id] = { season, xp: past.xp, level: past.level };
     }
     return map;
-  }, [db]);
+  }, [db, xpRules]);
 
   /** 진행 중인 승급 기록을 중복으로 보내지 않기 위한 잠금 */
   const promotingRef = useRef<Set<string>>(new Set());
@@ -1215,6 +1358,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       openReward,
       useReward,
       saveRewardSettings,
+      appSettings,
+      settingsSync,
+      saveAppSettings,
+      consumeBonusTime,
+      xpRules,
+      burstActive: appSettings.burst,
       parentUnlocked: sessionPin !== null,
       parentPinSetupRequired: mode === 'local' && !localPinReady && syncState !== 'syncing',
       unlockParent,
@@ -1253,6 +1402,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     openReward,
     useReward,
     saveRewardSettings,
+    appSettings,
+    settingsSync,
+    saveAppSettings,
+    consumeBonusTime,
+    xpRules,
     sessionPin,
     localPinReady,
     unlockParent,

@@ -1,3 +1,4 @@
+import { burstMultiplierAt, streakBonusXp, type BurstWindow, type StreakBonus } from './app-settings';
 import { addDays, daysBetweenISO, fromISODate, holidayName, koreaISODateOf, koreaTodayISO, toISODate } from './date';
 import type { Task, TaskStatus } from './types';
 
@@ -28,6 +29,17 @@ export const XP_ALL_CLEAR = 20;
 export const XP_STREAK = 10;
 /** 며칠째부터 연속 보너스가 붙는지 (3일 이상 연속) */
 export const STREAK_BONUS_FROM = 3;
+
+/**
+ * ⚙️ 부모 옵션에서 오는 XP 규칙
+ * · burstWindows — 🔥 버스트 타임(경험치 2배)이 켜져 있던 시간대. 그때 완료한 항목은 2배로 남습니다.
+ * · streakBonuses — ⑤ 연속 달성(3·7·14·30일) 보너스 XP.
+ * 값을 주지 않으면 예전과 똑같이 셈합니다(규칙 없음 = 2배 없음·연속 보너스 없음).
+ */
+export interface XpRules {
+  burstWindows?: BurstWindow[];
+  streakBonuses?: StreakBonus[];
+}
 
 /**
  * ⚖️ 완료가 늦어진 날수 → XP 비율.
@@ -82,6 +94,8 @@ export interface TaskXp {
   label: string;
   /** 완료 시각 기록이 없어 due_date 로 대신한 예전 행인지 */
   legacy: boolean;
+  /** 🔥 버스트 타임(경험치 2배)이 적용됐는지 */
+  burst: boolean;
 }
 
 /**
@@ -100,17 +114,28 @@ export function completionDateOf(task: Task): { date: string; legacy: boolean } 
  * 항목 1건의 XP. 완료 전이면 '지금(today) 완료하면 받을 XP' 를 돌려줍니다.
  * (지난 날짜 항목을 오늘 완료하면 그만큼 깎여서 들어옵니다)
  */
-export function xpForTask(task: Task, todayIso: string = koreaTodayISO()): TaskXp {
+export function xpForTask(
+  task: Task,
+  todayIso: string = koreaTodayISO(),
+  rules?: XpRules,
+): TaskXp {
   const completion = task.status === 'verified' ? completionDateOf(task) : { date: todayIso, legacy: false };
   const delayDays = Math.max(0, daysBetweenISO(task.due_date, completion.date));
   const percent = xpPercentForDelay(delayDays);
+  // 완료한 항목은 그 시각으로, 아직 안 한 항목은 '지금 하면' 으로 버스트 타임을 봅니다.
+  const completedIso =
+    task.status === 'verified'
+      ? task.verified_at ?? task.updated_at ?? `${task.due_date}T23:59:59`
+      : new Date().toISOString();
+  const multiplier = burstMultiplierAt(completedIso, rules?.burstWindows ?? []);
   return {
     delayDays,
     percent,
     factor: percent / 100,
-    xp: xpAmountForDelay(delayDays),
+    xp: Math.round(xpAmountForDelay(delayDays) * multiplier * 10) / 10,
     label: delayLabel(delayDays),
     legacy: completion.legacy,
+    burst: multiplier > 1,
   };
 }
 
@@ -285,6 +310,8 @@ export interface SeasonStats {
   /** 지금 이어지고 있는 평일 연속 100% 일수 (0 이면 없음) */
   streak: number;
   todayAllClear: boolean;
+  /** 이번 시즌에 ⑤ 연속 달성 보너스로 받은 XP 합 */
+  streakBonusXp: number;
   days: DayStat[];
 }
 
@@ -296,7 +323,7 @@ interface MonthWindow {
   inProgressDate: string | null;
 }
 
-function monthStats(tasks: Task[], memberId: string, window: MonthWindow): SeasonStats {
+function monthStats(tasks: Task[], memberId: string, window: MonthWindow, rules?: XpRules): SeasonStats {
   const byDate = new Map<string, { total: number; verified: number; itemXp: number; lateVerified: number }>();
   /** 항목 XP 는 완료 시각으로 정해지므로 today 는 계산에 쓰이지 않습니다(지연일수 계산 참고). */
   const todayIso = window.inProgressDate ?? window.lastDate;
@@ -309,7 +336,7 @@ function monthStats(tasks: Task[], memberId: string, window: MonthWindow): Seaso
     const slot = byDate.get(task.due_date) ?? { total: 0, verified: 0, itemXp: 0, lateVerified: 0 };
     slot.total += 1;
     if (task.status === 'verified') {
-      const detail = xpForTask(task, todayIso);
+      const detail = xpForTask(task, todayIso, rules);
       slot.verified += 1;
       slot.itemXp += detail.xp;
       if (detail.delayDays > 0) slot.lateVerified += 1;
@@ -324,6 +351,7 @@ function monthStats(tasks: Task[], memberId: string, window: MonthWindow): Seaso
   let allClearDays = 0;
   let streak = 0;
   let todayAllClear = false;
+  let streakBonusTotal = 0;
 
   const start = fromISODate(`${window.season}-01`);
   const end = fromISODate(window.lastDate);
@@ -346,6 +374,12 @@ function monthStats(tasks: Task[], memberId: string, window: MonthWindow): Seaso
       if (allClear) {
         streak += 1;
         if (streak >= STREAK_BONUS_FROM) dayXp += XP_STREAK;
+        // ⑤ 연속 달성 보너스 — 정확히 그 날수(3·7·14·30일…)를 채운 날에 한 번 붙습니다.
+        const milestone = streakBonusXp(streak, rules?.streakBonuses ?? []);
+        if (milestone > 0) {
+          dayXp += milestone;
+          streakBonusTotal += milestone;
+        }
       } else if (slot.total === 0) {
         // 할 일이 없던 평일 — 세지도, 끊지도 않습니다.
       } else if (date === window.inProgressDate) {
@@ -380,6 +414,7 @@ function monthStats(tasks: Task[], memberId: string, window: MonthWindow): Seaso
     level: levelForXp(xp),
     streak,
     todayAllClear,
+    streakBonusXp: streakBonusTotal,
     days,
   };
 }
@@ -389,9 +424,10 @@ export function computeSeasonStats(
   tasks: Task[],
   memberId: string,
   todayIso: string = koreaTodayISO(),
+  rules?: XpRules,
 ): SeasonStats {
   const season = seasonOf(todayIso);
-  return monthStats(tasks, memberId, { season, lastDate: todayIso, inProgressDate: todayIso });
+  return monthStats(tasks, memberId, { season, lastDate: todayIso, inProgressDate: todayIso }, rules);
 }
 
 /** 이미 끝난 달의 기록(지난달 최고 티어 등). */
@@ -399,8 +435,9 @@ export function computePastSeason(
   tasks: Task[],
   memberId: string,
   season: string,
+  rules?: XpRules,
 ): SeasonStats {
-  return monthStats(tasks, memberId, { season, lastDate: seasonEnd(season), inProgressDate: null });
+  return monthStats(tasks, memberId, { season, lastDate: seasonEnd(season), inProgressDate: null }, rules);
 }
 
 /** 그 시즌(달력 한 달)의 XP — 이번 달이면 오늘까지, 지난 달이면 그 달 끝까지. */
@@ -409,9 +446,10 @@ export function seasonXpFor(
   memberId: string,
   season: string,
   todayIso: string = koreaTodayISO(),
+  rules?: XpRules,
 ): number {
-  if (season === seasonOf(todayIso)) return computeSeasonStats(tasks, memberId, todayIso).xp;
-  return computePastSeason(tasks, memberId, season).xp;
+  if (season === seasonOf(todayIso)) return computeSeasonStats(tasks, memberId, todayIso, rules).xp;
+  return computePastSeason(tasks, memberId, season, rules).xp;
 }
 
 /** 완료 체크·되돌리기로 이번 시즌 XP 가 얼마나 달라지는지. */
@@ -440,11 +478,12 @@ export function xpChangeForStatus(
   tasks: Task[],
   task: Task,
   nextStatus: TaskStatus,
-  options: { completedAt?: string; todayIso?: string } = {},
+  options: { completedAt?: string; todayIso?: string; rules?: XpRules } = {},
 ): XpChange {
   const todayIso = options.todayIso ?? koreaTodayISO();
+  const rules = options.rules;
   const season = seasonOf(task.due_date);
-  const before = seasonXpFor(tasks, task.member_id, season, todayIso);
+  const before = seasonXpFor(tasks, task.member_id, season, todayIso, rules);
 
   const nextTask: Task = {
     ...task,
@@ -456,12 +495,14 @@ export function xpChangeForStatus(
   const afterTasks = known
     ? tasks.map((item) => (item.id === task.id ? nextTask : item))
     : [...tasks, nextTask];
-  const after = seasonXpFor(afterTasks, task.member_id, season, todayIso);
+  const after = seasonXpFor(afterTasks, task.member_id, season, todayIso, rules);
 
   const xpOf = (item: Task): number =>
-    item.status === 'verified' && !isXpHiddenTask(item) ? xpForTask(item, todayIso).xp : 0;
+    item.status === 'verified' && !isXpHiddenTask(item) ? xpForTask(item, todayIso, rules).xp : 0;
   const itemDelta = xpOf(nextTask) - xpOf(task);
-  const item = isXpHiddenTask(nextTask) ? { ...xpForTask(nextTask, todayIso), xp: 0 } : xpForTask(nextTask, todayIso);
+  const item = isXpHiddenTask(nextTask)
+    ? { ...xpForTask(nextTask, todayIso, rules), xp: 0 }
+    : xpForTask(nextTask, todayIso, rules);
 
   return {
     season,

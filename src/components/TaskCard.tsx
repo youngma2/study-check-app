@@ -1,6 +1,7 @@
 import { cx } from '../lib/cx';
 import { formatTimeKo, isFutureDate, koreaTodayISO } from '../lib/date';
 import { formatXp, isXpHiddenTask, XP_PER_TASK, xpForTask } from '../lib/season';
+import { useStudy } from '../lib/study-context';
 import { subjectMeta } from '../lib/theme';
 import type { Task } from '../lib/types';
 import { StatusBadge } from './StatusBadge';
@@ -23,6 +24,7 @@ interface TaskCardProps {
 
 export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, onEdit, onDelete, onCopy, today }: TaskCardProps) {
   const subject = subjectMeta(task.subject);
+  const study = useStudy();
   const verified = task.status === 'verified';
   /** 그날이 되기 전에는 완료 버튼을 잠깁니다. (오늘·지난 날짜는 그대로 완료) */
   const lockedUntilDue = !verified && isFutureDate(task.due_date, today);
@@ -30,7 +32,7 @@ export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, o
   const completedAt = verified ? formatTimeKo(task.verified_at) : null;
   const canCopy = canManage || canComplete;
   /** ⚖️ 완료 시점별 XP — 완료했으면 받은 XP, 아직이면 지금 완료하면 받을 XP */
-  const xp = isXpHiddenTask(task) ? null : xpForTask(task, today ?? koreaTodayISO());
+  const xp = isXpHiddenTask(task) ? null : xpForTask(task, today ?? koreaTodayISO(), study.xpRules);
   const xpChip = xp
     ? xp.percent === 100
       ? 'bg-indigo-50 text-indigo-600 ring-indigo-100'
@@ -84,16 +86,23 @@ export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, o
                 <span
                   data-testid="task-xp"
                   title={
-                    xp.percent === 100
-                      ? '그 날 완료해서 XP 100%'
-                      : `${xp.label} — 그 날 완료했다면 ${XP_PER_TASK} XP`
+                    xp.burst
+                      ? `🔥 버스트 타임(경험치 2배) — ${xp.label}`
+                      : xp.percent === 100
+                        ? '그 날 완료해서 XP 100%'
+                        : `${xp.label} — 그 날 완료했다면 ${XP_PER_TASK} XP`
                   }
                   className={cx(
                     'ml-1 inline-flex items-center whitespace-nowrap rounded-full px-1 py-0.5 text-[9px] font-extrabold leading-none ring-1',
-                    xpChip,
+                    xp.burst ? 'bg-orange-50 text-orange-600 ring-orange-200/80' : xpChip,
                   )}
                 >
                   +{formatXp(xp.xp)} XP
+                  {xp.burst ? (
+                    <span data-testid="task-xp-burst" className="ml-0.5 font-bold">
+                      🔥×2
+                    </span>
+                  ) : null}
                   {xp.percent === 100 ? null : (
                     <span data-testid="task-xp-delay" className="ml-0.5 font-bold">
                       · {xp.label}
