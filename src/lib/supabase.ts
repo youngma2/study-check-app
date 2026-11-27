@@ -591,7 +591,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
    * `family_app_settings` 표가 아직 없으면(설정 전) `available:false` 를 돌려주고,
    * 앱은 이 기기(localStorage) 값으로 계속 동작합니다 — 에러를 던지지 않습니다.
    */
-  async loadAppSettings(familyId: string): Promise<{ available: boolean; settings: AppSettings }> {
+  async loadAppSettings(familyId: string): Promise<{ available: boolean; settings: AppSettings | null }> {
     const res = await this.client
       .from('family_app_settings')
       .select('settings')
@@ -600,12 +600,13 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       .retry(false);
     if (res.error) {
       if (isMissingSchema(res.error)) {
-        return { available: false, settings: normalizeAppSettings(null) };
+        return { available: false, settings: null };
       }
       throw toUserError(res.error);
     }
     const row = ((res.data ?? []) as Array<{ settings?: unknown }>)[0];
-    return { available: true, settings: normalizeAppSettings(row?.settings) };
+    // 표는 있는데 아직 저장된 줄이 없으면(null) 이 폰의 설정을 그대로 씁니다.
+    return { available: true, settings: row ? normalizeAppSettings(row.settings) : null };
   }
 
   /** 가족 설정 저장 — 부모 + PIN 이 있어야 합니다(서버가 한 번 더 확인). */

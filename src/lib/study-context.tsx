@@ -601,7 +601,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
           setSettingsSync('local');
           return;
         }
-        applyAppSettings(settings);
+        // 표에 아직 저장된 줄이 없으면, 이 폰에서 정해 둔 설정을 그대로 이어서 씁니다.
+        if (settings) applyAppSettings(settings);
         setSettingsSync('cloud');
       })
       .catch((error: unknown) => {
