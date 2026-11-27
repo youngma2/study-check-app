@@ -471,6 +471,9 @@ public/icons/             앱 아이콘(192/512/maskable/apple)
     - ⑤ 3일 연속 = 130 XP(항목 30 + 100% 60 + 연속 10 + 보너스 30) · 주말 낀 5일 연속 = 210 XP ·
       보너스 30→50 조정 시 150 XP · 🐣 쪼꼬 축하 한마디
     - JS/콘솔 오류 0
+  - 진동(`haptics.ts`): 사용자가 화면을 한 번도 만지지 않은 상태에서는 브라우저가 진동을 막고 콘솔 경고를 남기므로,
+    그때는 조용히 건너뜁니다(막힌 진동과 결과는 같고 경고만 없음). `verify-note-alert.py` 도 '만지기 전엔 부르지 않음 +
+    만진 뒤 새 글엔 진동' 으로 확인합니다.
   - 기존 검증도 그대로 통과: `verify-season.mjs`(144) · `verify-xp-delay-ui.py`(25) · `verify-tier-ui.py`(40) ·
     `verify-parent-pin.py` · `verify-dashboard.py`(34) · `verify-child-parent-defaults.py` · `verify-family-board.py` ·
     `verify-demo-gift.py`(28) · `verify-no-legend.py`(23) · `verify-future-lock-grade.py`

@@ -170,7 +170,31 @@ def main() -> int:
             check('알림 태그', str(first['options'].get('tag', '')).startswith('study-note-'), str(first['options'].get('tag', '')))
             check('renotify: true', first['options'].get('renotify') is True, str(first['options'].get('renotify')))
             check('new Notification(...) 로는 가지 않았다', len(ctor_calls) == 0, str(len(ctor_calls)))
-            check('진동을 울렸다 [150, 80, 150]', vib and list(vib[0]) == [150, 80, 150], str(vib))
+            # 안드로이드 크롬은 사용자가 화면을 한 번도 만지지 않은 상태의 진동을 막고 콘솔에 경고를 남깁니다.
+            # 그래서 앱은 그런 경우 진동을 조용히 건너뜁니다(막힌 진동과 결과는 같고 경고만 없습니다).
+            check('화면을 만지기 전에는 진동을 부르지 않는다(브라우저 차단 회피)', not vib, str(vib))
+
+            # 화면을 한 번 만진 뒤 오는 새 글에는 진동이 울립니다.
+            page.click('[data-testid="family-notes"] h2')
+            page.wait_for_timeout(300)
+            page.evaluate(
+                """({ notesKey }) => {
+                    const notes = JSON.parse(localStorage.getItem(notesKey) || '[]');
+                    notes.unshift({
+                      id: 'n_mom_alert_probe2',
+                      family_id: 'fam_demo',
+                      author_id: 'mem_mom',
+                      content: '수학 5쪽까지예요',
+                      created_at: new Date(Date.now() + 1000).toISOString(),
+                    });
+                    localStorage.setItem(notesKey, JSON.stringify(notes));
+                    window.dispatchEvent(new StorageEvent('storage', { key: notesKey }));
+                }""",
+                {'notesKey': NOTES_KEY},
+            )
+            page.wait_for_timeout(2500)
+            vib2 = page.evaluate('window.__notifyRec').get('vibrate', [])
+            check('화면을 만진 뒤 새 글이 오면 진동 [150, 80, 150]', any(list(v) == [150, 80, 150] for v in vib2), str(vib2))
 
             # 3) 알림판을 눌러도 아직 안 본 배너가 사라지지 않아야 합니다.
             page.click('[data-testid="family-notes"] h2')
