@@ -556,7 +556,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
       p_pin: pin ?? null,
     });
     if (error) throw toUserError(error);
-    if (!data) throw new Error('사용 완료로 바꾸지 못했어요.');
+    if (!data) throw new Error('적립 완료로 바꾸지 못했어요.');
     return toTierEvent(data as TierEventRow);
   }
 
@@ -657,8 +657,7 @@ export class SupabaseStorageAdapter implements StorageAdapter {
 
   /**
    * 구성원 이름 바꾸기 — 부모 + PIN. (아이디는 그대로라 링크·숙제가 유지됩니다)
-   */
-  async renameMember(actorId: string, memberId: string, name: string, pin: string): Promise<Member> {
+   */  async renameMember(actorId: string, memberId: string, name: string, pin: string): Promise<Member> {
     const { data, error } = await this.client.rpc('study_rename_member', {
       p_actor_id: actorId,
       p_member_id: memberId,
@@ -668,6 +667,31 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     if (error) throw toUserError(error);
     if (!data) throw new Error('이름을 바꾸지 못했어요.');
     return toMember(data as MemberRow);
+  }
+
+  /**
+   * 🆕 새 프로필(구성원) 만들기 — 부모 + PIN.
+   * schema.sql 을 다시 실행해 `study_add_member` 함수가 들어 있으면 표에 구성원을 만들고,
+   * 아직 없으면 null 을 돌려줍니다(앱은 가족 설정 JSON 만으로 그대로 동작).
+   */
+  async addMember(
+    actorId: string,
+    member: { id: string; name: string; role: 'parent' | 'child'; emoji: string },
+    pin: string | null,
+  ): Promise<Member | null> {
+    const { data, error } = await this.client.rpc('study_add_member', {
+      p_actor_id: actorId,
+      p_member_id: member.id,
+      p_name: member.name,
+      p_role: member.role,
+      p_emoji: member.emoji,
+      p_pin: pin ?? null,
+    });
+    if (error) {
+      if (isMissingSchema(error)) return null;
+      throw toUserError(error);
+    }
+    return data ? toMember(data as MemberRow) : null;
   }
 
   /** 가족 데이터 변경을 실시간으로 받습니다. */

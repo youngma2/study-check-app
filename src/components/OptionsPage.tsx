@@ -1,14 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ROUTINE_PRESETS,
+  BURST_PERCENT_OPTIONS,
   TIER_DIFFICULTY_OPTIONS,
+  addCustomPreset,
   boxMinutePool,
+  burstFactorLabel,
   burstOnDate,
+  copyRoutineItemToPreset,
   itemsForDay,
   itemsForMember,
   mergeRoutineItems,
   nextStreakBonus,
+  presetMetas,
   reachedStreakBonus,
+  removeCustomPreset,
+  renameCustomPreset,
   withRoutineItems,
   type AppSettings,
   type BoxReward,
@@ -23,7 +29,7 @@ import { computePastSeason, formatXp, isXpHiddenTask, recentSeasons, TIERS, tier
 import { useStudy } from '../lib/study-context';
 import { SUBJECTS, subjectMeta } from '../lib/theme';
 import type { Task } from '../lib/types';
-import { ArrowLeftIcon, CheckIcon, PencilIcon, PlusIcon, TrashIcon } from './icons';
+import { ArrowLeftIcon, CheckIcon, PlusIcon, TrashIcon } from './icons';
 
 /**
  * ⚙️ 옵션 — 부모 관리(PIN) 안에서만 열리는 페이지
@@ -95,7 +101,17 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   const [subject, setSubject] = useState('etc');
   const [needParent, setNeedParent] = useState(false);
   const [draftDays, setDraftDays] = useState<number[]>(DAY_ORDER);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  /** 6번 — 목록 각 줄에서 바로 고치는 중인 항목 */
+  const [inlineEdit, setInlineEdit] = useState<{ id: string; title: string } | null>(null);
+  /** 8번 — '다른 프리셋에 넣기' 선택기를 연 항목 */
+  const [copyMenuFor, setCopyMenuFor] = useState<string | null>(null);
+  /** 7번 — + 프리셋 추가 입력 */
+  const [newPresetOpen, setNewPresetOpen] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
+  /** 지금 보고 있는(부모가 만든) 프리셋 이름 고치기 */
+  const [presetNameDraft, setPresetNameDraft] = useState('');
+  /** 저장되었습니다 팝업 */
+  const [flash, setFlash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bonusDraft, setBonusDraft] = useState(settings.streakBonuses);
   const [presetConfirm, setPresetConfirm] = useState<RoutineKey | null>(null);
@@ -114,8 +130,30 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   }, [study.appSettings.boxRewards]);
 
   const member = study.children.find((item) => item.id === memberId) ?? study.children[0];
-  const activeMeta = ROUTINE_PRESETS.find((preset) => preset.key === settings.activePreset) ?? ROUTINE_PRESETS[0];
-  const viewMeta = ROUTINE_PRESETS.find((preset) => preset.key === presetView) ?? ROUTINE_PRESETS[0];
+  const presetList = useMemo(() => presetMetas(settings), [settings]);
+  const activeMeta = presetList.find((preset) => preset.key === settings.activePreset) ?? presetList[0];
+  const viewMeta = presetList.find((preset) => preset.key === presetView) ?? presetList[0];
+
+  // 보는 프리셋이 사라졌으면(다른 폰에서 지웠으면) 지금 쓰는 프리셋으로 돌아갑니다.
+  useEffect(() => {
+    if (!presetList.some((preset) => preset.key === presetView)) setPresetView(settings.activePreset);
+    setPresetNameDraft(viewMeta?.label ?? '');
+  }, [presetList, presetView, settings.activePreset, viewMeta?.label]);
+
+  /** "저장되었습니다" 팝업 — 앞의 타이머가 뒤의 팝업을 지우지 않게 하나만 돕니다. */
+  const flashTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+  }, []);
+  const showSaved = (message = '저장되었습니다') => {
+    setFlash(message);
+    onNotify(message);
+    if (flashTimer.current !== null) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => {
+      flashTimer.current = null;
+      setFlash(null);
+    }, 1600);
+  };
 
   const savedItems = useMemo(
     () => (member ? itemsForMember(settings, member.id, presetView) : []),
@@ -152,7 +190,6 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   };
 
   const resetDraft = () => {
-    setEditingId(null);
     setTitle('');
     setSubject('etc');
     setNeedParent(false);
@@ -163,6 +200,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
     setDraftDays(dayFilter === 'all' ? DAY_ORDER : [dayFilter]);
   }, [dayFilter]);
 
+  /** 맨 아래 영역은 **추가 전용** — 새 항목만 바로 등록합니다. */
   const addItem = async () => {
     const text = title.trim();
     if (!text) {
@@ -173,16 +211,6 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
       onNotify('적용할 요일을 하나 이상 골라 주세요');
       return;
     }
-    if (editingId) {
-      const next = items.map((item) =>
-        item.id === editingId
-          ? { ...item, title: text, subject, days: draftDays, ...(needParent ? { needParent: true } : { needParent: undefined }) }
-          : item,
-      );
-      await saveItems(next, '기본 목록을 고쳤어요');
-      resetDraft();
-      return;
-    }
     const item: RoutineItem = {
       id: `ri_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
       title: text,
@@ -191,16 +219,86 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
       order: items.length,
       ...(needParent ? { needParent: true } : {}),
     };
-    await saveItems([...items, item], '기본 목록에 추가했어요');
-    resetDraft();
+    const next = withRoutineItems(study.appSettings, member?.id ?? '', [...items, item], presetView);
+    if (await save({ presets: next.presets })) {
+      resetDraft();
+      showSaved('저장되었습니다');
+    }
   };
 
-  const startEdit = (item: RoutineItem) => {
-    setEditingId(item.id);
-    setTitle(item.title);
-    setSubject(item.subject);
-    setNeedParent(item.needParent === true);
-    setDraftDays(item.days.length > 0 ? item.days : DAY_ORDER);
+  /** 6번 — 줄에서 바로 제목을 고치고 오른쪽 [확인] 을 누르면 즉시 저장 */
+  const saveInlineTitle = async (item: RoutineItem) => {
+    const text = (inlineEdit?.id === item.id ? inlineEdit.title : '').trim();
+    if (!text) {
+      onNotify('제목을 적어 주세요');
+      return;
+    }
+    const next = items.map((entry) => (entry.id === item.id ? { ...entry, title: text } : entry));
+    const result = withRoutineItems(study.appSettings, member?.id ?? '', next, presetView);
+    if (await save({ presets: result.presets })) {
+      setInlineEdit(null);
+      showSaved('저장되었습니다');
+    }
+  };
+
+  /** 8번 — 과목을 드롭다운으로 바로 고치면 즉시 저장 */
+  const changeItemSubject = async (item: RoutineItem, nextSubject: string) => {
+    if (nextSubject === item.subject) return;
+    const next = items.map((entry) => (entry.id === item.id ? { ...entry, subject: nextSubject } : entry));
+    const result = withRoutineItems(study.appSettings, member?.id ?? '', next, presetView);
+    if (await save({ presets: result.presets })) showSaved('저장되었습니다');
+  };
+
+  /** 8번 — 이 항목을 다른 프리셋에 바로 넣기(복사) */
+  const copyItemTo = async (item: RoutineItem, targetKey: string) => {
+    setCopyMenuFor(null);
+    const next = copyRoutineItemToPreset(study.appSettings, item, member?.id ?? '', targetKey);
+    const label = presetList.find((preset) => preset.key === targetKey)?.label ?? targetKey;
+    if (await save({ presets: next.presets })) showSaved(`'${item.title}' 을(를) ${label} 프리셋에 넣었습니다`);
+  };
+
+  /** 7번 — + 프리셋 추가 */
+  const addPreset = async () => {
+    const name = newPresetName.trim();
+    if (!name) {
+      onNotify('프리셋 이름을 적어 주세요');
+      return;
+    }
+    const created = addCustomPreset(study.appSettings, name);
+    if (await save({ presets: created.settings.presets })) {
+      setPresetView(created.key);
+      setNewPresetName('');
+      setNewPresetOpen(false);
+      showSaved(`'${name}' 프리셋을 만들었습니다`);
+    }
+  };
+
+  /** 7번 — 부모가 만든 프리셋 이름 바꾸기 */
+  const renamePresetNow = async () => {
+    const name = presetNameDraft.trim();
+    if (!name) {
+      onNotify('프리셋 이름을 적어 주세요');
+      return;
+    }
+    const next = renameCustomPreset(study.appSettings, presetView, name);
+    if (await save({ presets: next.presets })) showSaved('저장되었습니다');
+  };
+
+  /** 7번 — 부모가 만든 프리셋 지우기 */
+  const deletePresetNow = async () => {
+    if (!window.confirm(`'${viewMeta.label}' 프리셋을 지울까요? 안에 넣어 둔 목록도 함께 사라져요.`)) return;
+    const next = removeCustomPreset(study.appSettings, presetView);
+    if (await save({ presets: next.presets, activePreset: next.activePreset })) {
+      setPresetView(next.activePreset);
+      showSaved('프리셋을 지웠습니다');
+    }
+  };
+
+  /** 6번 — 맨 아래 [이 프리셋 저장] : 지금 보이는 목록을 그대로 저장합니다. */
+  const saveCurrentPreset = async () => {
+    if (!member) return;
+    const next = withRoutineItems(study.appSettings, member.id, items, presetView);
+    if (await save({ presets: next.presets })) showSaved('저장되었습니다');
   };
 
   const toggleItemDay = (item: RoutineItem, day: number) => {
@@ -236,7 +334,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   /** ④ 프리셋 확인 팝업에서 [적용] 을 눌렀을 때 */
   const applyPreset = async (key: RoutineKey) => {
     setPresetConfirm(null);
-    const meta = ROUTINE_PRESETS.find((preset) => preset.key === key);
+    const meta = presetList.find((preset) => preset.key === key);
     if (await save({ activePreset: key })) {
       onNotify(`${meta?.label ?? key} 프리셋을 적용했어요 · 이제 이 목록으로 채워요`);
     }
@@ -303,8 +401,8 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
     if (await save({ burst: on, burstWindows: windows })) {
       onNotify(
         on
-          ? '🔥 버스트 타임(수동) 시작! 지금부터 완료하는 공부는 경험치 2배예요'
-          : '수동 버스트 타임을 껐어요 · 그동안 받은 2배 경험치는 그대로 남아요',
+          ? `🔥 버스트 타임(수동) 시작! 지금부터 완료하는 경험치는 ${burstFactorLabel(settings.burstPercent)}예요`
+          : '수동 버스트 타임을 껐어요 · 그동안 받은 배수 경험치는 그대로 남아요',
       );
     }
   };
@@ -345,7 +443,9 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   };
 
   const saveBonuses = async () => {
-    if (await save({ streakBonuses: bonusDraft })) onNotify('연속 달성 보너스를 저장했어요');
+    // 입력한 일수·XP 를 그대로 보내고, 저장된 뒤의 값으로 확인합니다.
+    const draft = bonusDraft.map((bonus) => ({ day: bonus.day, xp: Math.max(0, Math.round(bonus.xp)) }));
+    if (await save({ streakBonuses: draft })) showSaved('저장되었습니다');
   };
 
   /** ⑪ 난이도 — 바꾸기 전에 지난 12개월 결산을 지금 기준으로 고정해 둡니다(소급 금지). */
@@ -435,13 +535,15 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
             <section className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5">
               <p className="text-[10px] font-extrabold tracking-wide text-slate-400">프리셋 — 눌러서 보고 고치기</p>
               <div className="mt-1.5 grid grid-cols-3 gap-1.5">
-                {ROUTINE_PRESETS.map((preset) => (
+                {presetList.map((preset) => (
                   <button
                     key={preset.key}
                     type="button"
                     data-testid={`preset-${preset.key}`}
                     onClick={() => {
                       setPresetView(preset.key);
+                      setCopyMenuFor(null);
+                      setInlineEdit(null);
                       resetDraft();
                     }}
                     aria-pressed={preset.key === presetView}
@@ -466,6 +568,85 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                   </button>
                 ))}
               </div>
+
+              {/* 7번 — + 프리셋 추가 (기본 3개 외에 이름을 정해 원하는 만큼) */}
+              {newPresetOpen ? (
+                <div className="mt-1.5 flex gap-1">
+                  <input
+                    data-testid="preset-new-name"
+                    value={newPresetName}
+                    maxLength={20}
+                    autoFocus
+                    onChange={(event) => setNewPresetName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') void addPreset();
+                      if (event.key === 'Escape') setNewPresetOpen(false);
+                    }}
+                    placeholder="새 프리셋 이름 (예: 주말, 시험 2주 전)"
+                    className="min-w-0 flex-1 rounded-xl bg-slate-50 px-2.5 py-2 text-[11px] font-bold text-slate-800 outline-none ring-1 ring-slate-200 placeholder:text-slate-300 focus:ring-indigo-300"
+                  />
+                  <button
+                    type="button"
+                    data-testid="preset-new-save"
+                    disabled={busy}
+                    onClick={() => void addPreset()}
+                    className="shrink-0 rounded-xl bg-indigo-600 px-3 py-2 text-[10.5px] font-extrabold text-white transition active:scale-95 disabled:opacity-50"
+                  >
+                    추가
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="preset-new-cancel"
+                    onClick={() => setNewPresetOpen(false)}
+                    className="shrink-0 rounded-xl bg-white px-2.5 py-2 text-[10.5px] font-extrabold text-slate-500 ring-1 ring-slate-200"
+                  >
+                    취소
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="preset-new"
+                  onClick={() => {
+                    setNewPresetName('');
+                    setNewPresetOpen(true);
+                  }}
+                  className="mt-1.5 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 py-1.5 text-[10.5px] font-extrabold text-indigo-600 transition active:scale-[0.99]"
+                >
+                  <PlusIcon className="h-3 w-3" strokeWidth={2.6} />
+                  프리셋 추가
+                </button>
+              )}
+
+              {/* 7번 — 부모가 만든 프리셋은 이름 바꾸기·지우기가 됩니다. */}
+              {viewMeta.custom ? (
+                <div data-testid="preset-manage" className="mt-1.5 flex gap-1">
+                  <input
+                    data-testid="preset-rename"
+                    value={presetNameDraft}
+                    maxLength={20}
+                    onChange={(event) => setPresetNameDraft(event.target.value)}
+                    className="min-w-0 flex-1 rounded-xl bg-slate-50 px-2.5 py-1.5 text-[10.5px] font-bold text-slate-800 outline-none ring-1 ring-slate-200 focus:ring-indigo-300"
+                  />
+                  <button
+                    type="button"
+                    data-testid="preset-rename-save"
+                    onClick={() => void renamePresetNow()}
+                    className="shrink-0 rounded-xl bg-slate-900 px-2.5 py-1.5 text-[10px] font-extrabold text-white transition active:scale-95"
+                  >
+                    이름 저장
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="preset-delete"
+                    onClick={() => void deletePresetNow()}
+                    className="shrink-0 rounded-xl bg-rose-50 px-2.5 py-1.5 text-[10px] font-extrabold text-rose-500 ring-1 ring-rose-100 transition active:scale-95"
+                  >
+                    삭제
+                  </button>
+                </div>
+              ) : null}
+
               <p data-testid="active-preset" className="mt-2 text-[9.5px] font-bold leading-relaxed text-slate-400">
                 지금 <b className="font-extrabold text-indigo-600">{viewMeta.label}</b> 목록을 고치고 있어요.
                 실제로 쓰는 목록은 <b className="font-extrabold text-slate-600">{activeMeta.label}</b> 이에요.
@@ -481,7 +662,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                 ) : null}
               </p>
               <p className="mt-1 text-[9px] font-semibold leading-relaxed text-slate-400">
-                학기중은 지난 기록으로 기본이 채워져 있고, 방학·시험기간은 비어 있어요 — 직접 채워 주세요.
+                학기중은 지난 기록으로 기본이 채워져 있고, 나머지(방학·시험기간·내가 만든 것)는 비어 있어요 — 직접 채워 주세요.
               </p>
             </section>
 
@@ -577,54 +758,90 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                           <span className={cx('grid h-6 w-6 shrink-0 place-items-center rounded-lg text-[10px] font-extrabold', meta.tile)}>
                             {meta.short}
                           </span>
-                          <span className="min-w-0 flex-1 truncate text-[11.5px] font-bold text-slate-700">
-                            {item.title}
-                            {item.needParent ? (
-                              <span
-                                data-testid={`routine-need-${item.id}`}
-                                className="ml-1 rounded-full bg-amber-50 px-1 py-0.5 text-[8px] font-extrabold text-amber-700 ring-1 ring-amber-200/80"
+                          {inlineEdit?.id === item.id ? (
+                            /* 6번 — 줄에서 바로 고치고 오른쪽 [확인] 으로 즉시 저장 */
+                            <>
+                              <input
+                                data-testid={`routine-inline-${item.id}`}
+                                value={inlineEdit.title}
+                                autoFocus
+                                maxLength={60}
+                                onChange={(event) =>
+                                  setInlineEdit((prev) => (prev ? { ...prev, title: event.target.value } : prev))
+                                }
+                                onKeyDown={(event) => {
+                                  if (event.key === 'Enter') void saveInlineTitle(item);
+                                  if (event.key === 'Escape') setInlineEdit(null);
+                                }}
+                                className="min-w-0 flex-1 rounded-lg bg-white px-2 py-1 text-[11.5px] font-bold text-slate-800 outline-none ring-1 ring-indigo-300"
+                              />
+                              <button
+                                type="button"
+                                data-testid={`routine-inline-save-${item.id}`}
+                                onClick={() => void saveInlineTitle(item)}
+                                className="shrink-0 rounded-full bg-emerald-600 px-2 py-1 text-[9px] font-extrabold text-white transition active:scale-95"
                               >
-                                부모 확인
-                              </span>
-                            ) : null}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => moveItem(item, -1)}
-                            aria-label={`${item.title} 위로`}
-                            className="grid h-5 w-5 place-items-center rounded-full bg-white text-[9px] font-extrabold text-slate-400 ring-1 ring-slate-200 active:scale-90"
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => moveItem(item, 1)}
-                            aria-label={`${item.title} 아래로`}
-                            className="grid h-5 w-5 place-items-center rounded-full bg-white text-[9px] font-extrabold text-slate-400 ring-1 ring-slate-200 active:scale-90"
-                          >
-                            ↓
-                          </button>
-                          <button
-                            type="button"
-                            data-testid={`routine-edit-${item.id}`}
-                            onClick={() => startEdit(item)}
-                            aria-label={`${item.title} 수정`}
-                            className="grid h-5 w-5 place-items-center rounded-full bg-white text-slate-400 ring-1 ring-slate-200 transition active:scale-90"
-                          >
-                            <PencilIcon className="h-2.5 w-2.5" />
-                          </button>
-                          <button
-                            type="button"
-                            data-testid={`routine-delete-${item.id}`}
-                            onClick={() => void saveItems(items.filter((entry) => entry.id !== item.id), '기본 목록에서 지웠어요')}
-                            aria-label={`${item.title} 삭제`}
-                            className="grid h-5 w-5 place-items-center rounded-full bg-white text-rose-400 ring-1 ring-rose-100 transition active:scale-90"
-                          >
-                            <TrashIcon className="h-2.5 w-2.5" />
-                          </button>
+                                확인
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`routine-inline-cancel-${item.id}`}
+                                onClick={() => setInlineEdit(null)}
+                                aria-label="수정 취소"
+                                className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-white text-slate-400 ring-1 ring-slate-200 active:scale-90"
+                              >
+                                ✕
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                data-testid={`routine-title-${item.id}`}
+                                onClick={() => setInlineEdit({ id: item.id, title: item.title })}
+                                title="눌러서 바로 고치기"
+                                className="min-w-0 flex-1 truncate rounded-lg py-0.5 text-left text-[11.5px] font-bold text-slate-700 transition active:scale-[0.99]"
+                              >
+                                {item.title}
+                                {item.needParent ? (
+                                  <span
+                                    data-testid={`routine-need-${item.id}`}
+                                    className="ml-1 rounded-full bg-amber-50 px-1 py-0.5 text-[8px] font-extrabold text-amber-700 ring-1 ring-amber-200/80"
+                                  >
+                                    부모 확인
+                                  </span>
+                                ) : null}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveItem(item, -1)}
+                                aria-label={`${item.title} 위로`}
+                                className="grid h-5 w-5 place-items-center rounded-full bg-white text-[9px] font-extrabold text-slate-400 ring-1 ring-slate-200 active:scale-90"
+                              >
+                                ↑
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveItem(item, 1)}
+                                aria-label={`${item.title} 아래로`}
+                                className="grid h-5 w-5 place-items-center rounded-full bg-white text-[9px] font-extrabold text-slate-400 ring-1 ring-slate-200 active:scale-90"
+                              >
+                                ↓
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`routine-delete-${item.id}`}
+                                onClick={() => void saveItems(items.filter((entry) => entry.id !== item.id), '기본 목록에서 지웠어요')}
+                                aria-label={`${item.title} 삭제`}
+                                className="grid h-5 w-5 place-items-center rounded-full bg-white text-rose-400 ring-1 ring-rose-100 transition active:scale-90"
+                              >
+                                <TrashIcon className="h-2.5 w-2.5" />
+                              </button>
+                            </>
+                          )}
                         </div>
 
-                        <div className="mt-1 flex items-center gap-0.5 pl-5">
+                        <div className="mt-1 flex flex-wrap items-center gap-0.5 pl-5">
                           {DAY_ORDER.map((day) => {
                             const on = item.days.includes(day);
                             return (
@@ -646,13 +863,29 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                               </button>
                             );
                           })}
+
+                          {/* 8번 — 과목을 드롭다운으로 바로 고치기 */}
+                          <select
+                            data-testid={`routine-subject-${item.id}`}
+                            value={item.subject}
+                            onChange={(event) => void changeItemSubject(item, event.target.value)}
+                            aria-label={`${item.title} 과목`}
+                            className="ml-0.5 rounded-md bg-white px-1 py-0.5 text-[8.5px] font-extrabold text-slate-500 ring-1 ring-slate-200"
+                          >
+                            {SUBJECTS.map((entry) => (
+                              <option key={entry.key} value={entry.key}>
+                                {entry.label}
+                              </option>
+                            ))}
+                          </select>
+
                           <button
                             type="button"
                             data-testid={`routine-need-${item.id}-toggle`}
                             onClick={() => toggleNeedParent(item)}
                             aria-pressed={item.needParent === true}
                             className={cx(
-                              'ml-auto rounded-full px-1.5 py-0.5 text-[8.5px] font-extrabold ring-1 transition active:scale-95',
+                              'rounded-full px-1.5 py-0.5 text-[8.5px] font-extrabold ring-1 transition active:scale-95',
                               item.needParent
                                 ? 'bg-amber-100 text-amber-700 ring-amber-200'
                                 : 'bg-white text-slate-400 ring-slate-200',
@@ -660,15 +893,50 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                           >
                             부모 확인 {item.needParent ? '켬' : '끔'}
                           </button>
+
+                          {/* 8번 — 이 항목을 다른 프리셋에 바로 넣기 */}
+                          <button
+                            type="button"
+                            data-testid={`routine-copy-${item.id}`}
+                            onClick={() => setCopyMenuFor(copyMenuFor === item.id ? null : item.id)}
+                            aria-expanded={copyMenuFor === item.id}
+                            className="ml-auto rounded-full bg-white px-1.5 py-0.5 text-[8.5px] font-extrabold text-indigo-600 ring-1 ring-indigo-200 transition active:scale-95"
+                          >
+                            📥 다른 프리셋
+                          </button>
                         </div>
+
+                        {copyMenuFor === item.id ? (
+                          <div
+                            data-testid={`routine-copy-menu-${item.id}`}
+                            className="mt-1 flex flex-wrap gap-1 rounded-lg bg-indigo-50/70 px-1.5 py-1"
+                          >
+                            <span className="text-[8.5px] font-extrabold text-indigo-400">넣을 프리셋</span>
+                            {presetList
+                              .filter((preset) => preset.key !== presetView)
+                              .map((preset) => (
+                                <button
+                                  key={preset.key}
+                                  type="button"
+                                  data-testid={`routine-copy-to-${item.id}-${preset.key}`}
+                                  onClick={() => void copyItemTo(item, preset.key)}
+                                  className="rounded-full bg-white px-1.5 py-0.5 text-[8.5px] font-extrabold text-indigo-700 ring-1 ring-indigo-200 transition active:scale-95"
+                                >
+                                  {preset.emoji} {preset.label}
+                                </button>
+                              ))}
+                          </div>
+                        ) : null}
                       </li>
                     );
                   })}
                 </ul>
               )}
 
+              {/* 6번 — 맨 아래 영역은 **추가 전용** (+ 추가) — 수정은 위 목록 줄에서 바로 */}
               <div className="mt-2 rounded-2xl bg-indigo-50/70 p-2 ring-1 ring-indigo-100">
-                <div className="flex gap-1.5">
+                <p className="text-[9px] font-extrabold text-indigo-400">새 항목 추가 (수정은 위 목록 줄을 눌러서)</p>
+                <div className="mt-1 flex gap-1.5">
                   <input
                     data-testid="routine-title"
                     value={title}
@@ -738,18 +1006,18 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                     className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-indigo-600 py-2 text-[11px] font-extrabold text-white transition active:scale-[0.98] disabled:opacity-50"
                   >
                     <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.6} />
-                    {editingId ? '수정 저장' : '목록에 추가'}
+                    추가
                   </button>
-                  {editingId ? (
-                    <button
-                      type="button"
-                      data-testid="routine-cancel"
-                      onClick={resetDraft}
-                      className="rounded-xl bg-white px-3 py-2 text-[11px] font-extrabold text-slate-500 ring-1 ring-slate-200"
-                    >
-                      취소
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    data-testid="preset-save"
+                    disabled={busy}
+                    onClick={() => void saveCurrentPreset()}
+                    className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-slate-900 py-2 text-[11px] font-extrabold text-white transition active:scale-[0.98] disabled:opacity-50"
+                  >
+                    <CheckIcon className="h-3.5 w-3.5" strokeWidth={2.6} />
+                    이 프리셋 저장
+                  </button>
                 </div>
               </div>
 
@@ -770,9 +1038,12 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
             <section className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="text-[12.5px] font-extrabold text-slate-900">🔥 버스트 타임 (경험치 2배)</p>
+                  <p className="text-[12.5px] font-extrabold text-slate-900">
+                    🔥 버스트 타임 (경험치 {burstFactorLabel(study.appSettings.burstPercent)})
+                  </p>
                   <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-slate-500">
-                    켠 날부터 완료·검증하는 공부는 경험치가 2배로 들어가요. 지난 날짜 기록에는 소급하지 않아요.
+                    켠 날부터 완료·검증하는 공부는 경험치가 {burstFactorLabel(study.appSettings.burstPercent)}로 들어가요.
+                    지난 날짜 기록에는 소급하지 않아요.
                   </p>
                 </div>
                 <button
@@ -808,6 +1079,35 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                   : '수동은 꺼져 있어요'}
               </p>
 
+              {/* 9번 — 버스트 타임 경험치 배수 (+25% · +50% · +75% · +100%) */}
+              <p className="mt-2 text-[10px] font-extrabold text-slate-500">경험치 배수</p>
+              <div className="mt-1 flex gap-1">
+                {BURST_PERCENT_OPTIONS.map((percent) => (
+                  <button
+                    key={percent}
+                    type="button"
+                    data-testid={`burst-percent-${percent}`}
+                    onClick={() => void save({ burstPercent: percent })}
+                    aria-pressed={study.appSettings.burstPercent === percent}
+                    className={cx(
+                      'flex-1 rounded-xl py-1.5 text-[10px] font-extrabold ring-1 transition active:scale-95',
+                      study.appSettings.burstPercent === percent
+                        ? 'bg-orange-500 text-white ring-orange-500'
+                        : 'bg-slate-50 text-slate-600 ring-slate-200',
+                    )}
+                  >
+                    +{percent}%
+                    <span className="mt-0.5 block text-[8px] font-bold opacity-70">
+                      {burstFactorLabel(percent)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p data-testid="burst-percent-now" className="mt-1 text-[9px] font-semibold text-slate-400">
+                지금 배수 <b className="font-extrabold text-orange-600">{burstFactorLabel(study.appSettings.burstPercent)}</b> ·
+                배너·배지에도 같은 배수가 표시돼요.
+              </p>
+
               <label className="mt-2 flex items-start gap-2 rounded-xl bg-slate-50 px-2 py-1.5">
                 <input
                   data-testid="burst-auto"
@@ -825,7 +1125,8 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                 <span className="min-w-0 flex-1">
                   <span className="block text-[11px] font-extrabold text-slate-700">자동 설정 — 월말에 알아서 켜기</span>
                   <span className="mt-0.5 block text-[9.5px] font-semibold text-slate-500">
-                    켠 날({study.appSettings.burstAutoFrom ?? today})부터, 월말까지 남은 일수가 아래 값보다 적으면 2배예요.
+                    켠 날({study.appSettings.burstAutoFrom ?? today})부터, 월말까지 남은 일수가 아래 값보다 적으면{' '}
+                    {burstFactorLabel(study.appSettings.burstPercent)}예요.
                   </span>
                 </span>
                 <input
@@ -856,8 +1157,8 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                   <span className="block text-[11px] font-extrabold text-slate-700">수동·자동 중복 적용</span>
                   <span className="mt-0.5 block text-[9.5px] font-semibold text-slate-500">
                     {study.appSettings.burstOverlap
-                      ? '둘 다 켜진 날은 4배로 들어가요.'
-                      : '둘 다 켜져도 최대 2배까지만 들어가요.'}
+                      ? `둘 다 켜진 날은 ${burstFactorLabel(study.appSettings.burstPercent * 2)}로 들어가요.`
+                      : `둘 다 켜져도 ${burstFactorLabel(study.appSettings.burstPercent)} 한 번만 들어가요.`}
                   </span>
                 </span>
               </label>
@@ -870,7 +1171,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                 )}
               >
                 {todayBurst
-                  ? '🔥 오늘은 버스트 타임 — 지금 완료하면 경험치 2배예요'
+                  ? `🔥 오늘은 버스트 타임 — 지금 완료하면 경험치 ${burstFactorLabel(study.appSettings.burstPercent)}예요`
                   : '오늘은 버스트 타임이 아니에요 (경험치 1배)'}
               </p>
             </section>
@@ -1079,6 +1380,14 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                 <CheckIcon className="h-3.5 w-3.5" strokeWidth={2.6} />
                 보너스 XP 저장
               </button>
+              <p data-testid="streak-saved" className="mt-1 text-[9px] font-semibold leading-relaxed text-slate-400">
+                저장된 값 ·{' '}
+                {study.appSettings.streakBonuses.length === 0
+                  ? '보너스 없음'
+                  : study.appSettings.streakBonuses
+                      .map((bonus) => `${bonus.day}일 +${formatXp(bonus.xp)} XP`)
+                      .join(' · ')}
+              </p>
 
               <div className="mt-2 space-y-1">
                 {study.children.map((child) => {
@@ -1128,6 +1437,21 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
         </p>
       </div>
 
+      {/* "저장되었습니다" 팝업 — 6·10번처럼 저장 버튼을 눌렀을 때 확실히 보여 줍니다 */}
+      {flash ? (
+        <div
+          data-testid="saved-popup"
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-0 top-16 z-[70] flex justify-center px-6"
+        >
+          <span className="animate-toast-in inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3.5 py-2 text-[11.5px] font-extrabold text-white shadow-lg shadow-emerald-500/30">
+            <CheckIcon className="h-3.5 w-3.5" strokeWidth={3} />
+            {flash}
+          </span>
+        </div>
+      ) : null}
+
       {/* ④ 프리셋 적용 확인 팝업 */}
       {presetConfirm ? (
         <div
@@ -1139,10 +1463,10 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
         >
           <div className="w-full max-w-[300px] rounded-[26px] bg-white p-5 text-center shadow-2xl">
             <p className="text-[24px] leading-none" aria-hidden>
-              {ROUTINE_PRESETS.find((preset) => preset.key === presetConfirm)?.emoji ?? '📚'}
+              {presetList.find((preset) => preset.key === presetConfirm)?.emoji ?? '📚'}
             </p>
             <h2 className="mt-2 text-[15px] font-extrabold tracking-tight text-slate-900">
-              {ROUTINE_PRESETS.find((preset) => preset.key === presetConfirm)?.label ?? ''} 프리셋을 적용할까요?
+              {presetList.find((preset) => preset.key === presetConfirm)?.label ?? ''} 프리셋을 적용할까요?
             </h2>
             <p className="mt-1 text-[10.5px] font-semibold leading-relaxed text-slate-500">
               아이별·요일별 기본 목록이 이 프리셋 것으로 바뀌어요.

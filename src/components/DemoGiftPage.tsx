@@ -71,8 +71,8 @@ export function DemoGiftPage() {
 
   const notify = useCallback((message: string) => {
     // 팝업이 실제 앱과 같은 문구를 쓰므로, 체험 페이지에서는 '저장 안 됨'을 분명히 해 둡니다.
-    const text = message.startsWith('사용 완료로 기록')
-      ? '사용 완료로 표시했어요 (체험용 · 저장 안 됨)'
+    const text = message.startsWith('적립 완료로 기록')
+      ? '적립 완료로 표시했어요 (체험용 · 저장 안 됨)'
       : message;
     setToast(text);
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
@@ -195,7 +195,7 @@ export function DemoGiftPage() {
             <li>· 여는 동안 상자가 흔들리고 두근두근 소리·진동</li>
             <li>· 당첨: 팡파레 · 짜릿한 진동 · 폭죽 + 나머지 두 상자도 살짝 열림</li>
             <li>· 오른쪽 위 🔊/🔇 로 효과음을 끄고 켤 수 있어요</li>
-            <li>· 부모 화면처럼 ‘사용 완료’ 버튼도 눌러볼 수 있어요(저장 안 됨)</li>
+            <li>· 부모 화면처럼 ‘적립 완료’ 버튼도 눌러볼 수 있어요(저장 안 됨)</li>
           </ul>
           <p className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-[10.5px] font-bold text-slate-500">
             나올 수 있는 시간: {DEFAULT_REWARD_POOL.map((value) => `+${value}분`).join(' · ')}

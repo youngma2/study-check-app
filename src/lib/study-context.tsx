@@ -22,9 +22,11 @@ import {
 import {
   clearSessionPin,
   hasLocalPin,
+  hashPin,
   isPinFormat,
   readSessionPin,
   setLocalPin,
+  verifyHashedPin,
   verifyLocalPin,
   writeSessionPin,
 } from './pin';
@@ -49,11 +51,14 @@ import {
   boxIsPointsPrize,
   boxRewardFor,
   burstActiveToday,
+  burstFactorLabel,
   loadLocalAppSettings,
+  newProfileId,
   normalizeAppSettings,
   remainingBonusMinutes,
   saveLocalAppSettings,
   type AppSettings,
+  type ProfilePin,
 } from './app-settings';
 import { unusedBonusMinutes } from './report';
 import { isShopTask, pointPrizeEventIds, prizeTaskInput } from './shop';
@@ -148,6 +153,26 @@ export interface StudyContextValue {
   appSettings: AppSettings;
   /** 🖼 아이 프로필 아이콘 바꾸기 — 부모(PIN) 만 */
   setMemberEmoji: (memberId: string, emoji: string) => Promise<ActionResult>;
+  /** 🔥 버스트 타임 배수(1.25 · 1.5 · 1.75 · 2) — 배너·배지에 씁니다. */
+  burstFactor: number;
+  /** 🔥 배수 문구('1.5배') */
+  burstFactorText: string;
+  /** 🔐 프로필별 4자리 PIN — 평문 없이 솔트+해시만 (추가 SQL 없이 가족 설정 JSON) */
+  profilePins: Record<string, ProfilePin>;
+  hasProfilePin: (memberId: string) => boolean;
+  verifyProfilePin: (memberId: string, pin: string) => Promise<ActionResult>;
+  setProfilePin: (memberId: string, pin: string) => Promise<ActionResult>;
+  resetProfilePin: (memberId: string) => Promise<ActionResult>;
+  /** 🆕 새 프로필 만들기 — 부모 PIN 이 풀려 있어야 저장됩니다(추가 SQL 없음). */
+  createProfile: (
+    input: {
+      name: string;
+      emoji: string;
+      role: 'parent' | 'child';
+      pin?: string;
+    },
+    actorId?: string,
+  ) => Promise<ActionResult & { memberId?: string }>;
   /** 📅 최근 12개월 월말 결산 최종 티어 (지난달부터) */
   monthlySettlementsFor: (memberId: string) => MonthSettlement[];
   /** 'cloud' = 가족 폰이 함께 씀 / 'local' = 이 기기에만(SQL 실행 전) */
@@ -264,7 +289,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     dbRef.current = next;
     setDb(next);
     setCurrentMemberIdState((prev) =>
-      next.members.some((member) => member.id === prev)
+      next.members.some((member) => member.id === prev) ||
+      appSettingsRef.current.extraMembers.some((member) => member.id === prev)
         ? prev
         : next.members.find((member) => member.role === 'parent')?.id ?? next.members[0]?.id ?? prev,
     );
@@ -602,6 +628,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       // 자동 버스트 타임이 꺼져 있으면 0 — '자동 없음'으로 셈합니다.
       burstAutoDays: appSettings.burstAuto ? appSettings.burstAutoDays : 0,
       burstOverlap: appSettings.burstOverlap,
+      burstPercent: appSettings.burstPercent,
       // 켠 날 이전 기록에는 소급 적용하지 않습니다.
       burstAutoFrom: appSettings.burstAutoFrom,
       tierDifficulty: appSettings.tierDifficulty,
@@ -612,6 +639,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       appSettings.burstAuto,
       appSettings.burstAutoDays,
       appSettings.burstOverlap,
+      appSettings.burstPercent,
       appSettings.burstAutoFrom,
       appSettings.tierDifficulty,
     ],
@@ -732,14 +760,17 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     return cloud.subscribeAppSettings(familyId, (settings) => applyAppSettings(settings));
   }, [cloud, mode, syncState, settingsSync, applyAppSettings]);
 
-  /** ⚙️ 부모 옵션 저장 — 가족 DB 가 있으면 모든 폰에, 없으면 이 폰에만 저장합니다. */
-  const saveAppSettings = useCallback(
-    async (patch: Partial<AppSettings>): Promise<ActionResult & { localOnly?: boolean }> => {
+  /**
+   * ⚙️ 부모 옵션 저장 — 가족 DB 가 있으면 모든 폰에, 없으면 이 폰에만 저장합니다.
+   * `actorId` 는 저장을 요청한 사람(보통 지금 보고 있는 사람). 새 프로필 만들기는 아직 화면에 들어가기 전이라
+   * 부모 PIN 을 확인한 부모 계정을 직접 넘깁니다.
+   */
+  const saveSettingsAs = useCallback(
+    async (actorId: string, patch: Partial<AppSettings>): Promise<ActionResult & { localOnly?: boolean }> => {
       const current = appSettingsRef.current;
       const next = normalizeAppSettings({ ...current, ...patch });
       const db = dbRef.current;
-      const actor =
-        db.members.find((member) => member.id === currentMemberIdRef.current) ?? db.members[0];
+      const actor = db.members.find((member) => member.id === actorId) ?? db.members[0];
       if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
       if (actor.role !== 'parent') return { ok: false, error: '옵션은 부모님만 바꿀 수 있어요.' };
 
@@ -766,6 +797,12 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       return { ok: true, localOnly: cloud !== null ? true : undefined };
     },
     [applyAppSettings, cloud],
+  );
+
+  /** ⚙️ 부모 옵션 저장 — 지금 보고 있는 사람 명의로 저장합니다. */
+  const saveAppSettings = useCallback(
+    (patch: Partial<AppSettings>) => saveSettingsAs(currentMemberIdRef.current, patch),
+    [saveSettingsAs],
   );
 
   /** ② 뽑기로 받은 시간에서 분을 나눠 씁니다(부모 전용) — 타이머로 쓸 수도, 바로 차감할 수도 있습니다. */
@@ -1134,7 +1171,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       if (next !== prev) {
         dbRef.current = next;
         setDb(next);
-        if (!next.members.some((member) => member.id === currentMemberIdRef.current) && next.members[0]) {
+        if (
+          !next.members.some((member) => member.id === currentMemberIdRef.current) &&
+          !appSettingsRef.current.extraMembers.some((member) => member.id === currentMemberIdRef.current) &&
+          next.members[0]
+        ) {
           setCurrentMemberIdState(next.members[0].id);
         }
       }
@@ -1288,7 +1329,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   }, [local]);
 
   const setCurrentMember = useCallback((memberId: string) => {
-    if (!dbRef.current.members.some((member) => member.id === memberId)) return;
+    // 가족 DB 구성원 + 부모가 새로 만든 프로필(가족 설정 JSON) 모두 고를 수 있습니다.
+    const known =
+      dbRef.current.members.some((member) => member.id === memberId) ||
+      appSettingsRef.current.extraMembers.some((member) => member.id === memberId);
+    if (!known) return;
     setCurrentMemberIdState(memberId);
   }, []);
 
@@ -1458,14 +1503,21 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   }, [db, notesState, syncState, cloud, postJjokkoNote]);
 
   /** 🖼 아이가 고른 프로필 아이콘(⚙️ 옵션에 저장)을 모든 화면에 반영합니다. */
+  const allMembers = useMemo(() => {
+    const known = new Set(db.members.map((member) => member.id));
+    // 🆕 부모가 만든 프로필(가족 설정 JSON)을 DB 구성원 뒤에 붙입니다.
+    const extra = appSettings.extraMembers.filter((member) => !known.has(member.id));
+    return [...db.members, ...extra];
+  }, [db.members, appSettings.extraMembers]);
+
   const displayMembers = useMemo(
     () =>
-      db.members.map((member) =>
+      allMembers.map((member) =>
         appSettings.profileEmoji[member.id]
           ? { ...member, emoji: appSettings.profileEmoji[member.id] }
           : member,
       ),
-    [db.members, appSettings.profileEmoji],
+    [allMembers, appSettings.profileEmoji],
   );
 
   /** 🖼 프로필 아이콘 바꾸기 — 부모(PIN) 만. */
@@ -1482,6 +1534,118 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
     [saveAppSettings],
+  );
+
+  /** 🔐 프로필 PIN — 그 사람 PIN 이 정해져 있는지 */
+  const hasProfilePin = useCallback(
+    (memberId: string) => Boolean(appSettingsRef.current.profilePins[memberId]),
+    [],
+  );
+
+  /** 🔐 프로필 PIN 확인 — 맞으면 ok, 틀리면 이유를 돌려줍니다. */
+  const verifyProfilePin = useCallback(
+    async (memberId: string, pin: string): Promise<ActionResult> => {
+      if (!isPinFormat(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
+      const record = appSettingsRef.current.profilePins[memberId];
+      if (!record) return { ok: true };
+      const valid = await verifyHashedPin(pin, record);
+      return valid ? { ok: true } : { ok: false, error: 'PIN이 맞지 않아요. 다시 입력해 주세요.' };
+    },
+    [],
+  );
+
+  /** 🔐 프로필 PIN 정하기·바꾸기 — 부모(PIN) 만. */
+  const setProfilePin = useCallback(
+    async (memberId: string, pin: string): Promise<ActionResult> => {
+      if (!isPinFormat(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
+      const record = await hashPin(pin);
+      const result = await saveAppSettings({
+        profilePins: { ...appSettingsRef.current.profilePins, [memberId]: record },
+      });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
+    },
+    [saveAppSettings],
+  );
+
+  /** 🔐 프로필 PIN 지우기(초기화) — 부모(PIN) 만. 다음부터는 PIN 없이 들어갑니다. */
+  const resetProfilePin = useCallback(
+    async (memberId: string): Promise<ActionResult> => {
+      const next = { ...appSettingsRef.current.profilePins };
+      delete next[memberId];
+      const result = await saveAppSettings({ profilePins: next });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
+    },
+    [saveAppSettings],
+  );
+
+  /** 🆕 새 프로필 만들기 — 이름·아이콘·역할·PIN. 추가 SQL 없이 가족 설정 JSON 에 저장합니다. */
+  const createProfile = useCallback(
+    async (
+      input: {
+        name: string;
+        emoji: string;
+        role: 'parent' | 'child';
+        pin?: string;
+      },
+      /** 부모 PIN 을 확인한 부모 계정 id — 없으면 지금 보고 있는 사람 */
+      actorId?: string,
+    ): Promise<ActionResult & { memberId?: string }> => {
+      const name = input.name.trim().slice(0, 20);
+      if (!name) return { ok: false, error: '이름을 적어 주세요.' };
+      if (input.pin && !isPinFormat(input.pin)) {
+        return { ok: false, error: 'PIN은 4자리 숫자로 정해 주세요.' };
+      }
+      const current = appSettingsRef.current;
+      if (current.extraMembers.length >= 8) {
+        return { ok: false, error: '새 프로필은 8개까지 만들 수 있어요.' };
+      }
+      const db = dbRef.current;
+      const actor =
+        db.members.find((member) => member.id === (actorId ?? currentMemberIdRef.current)) ??
+        db.members.find((member) => member.role === 'parent') ??
+        db.members[0];
+      const colors = ['sky', 'violet', 'rose', 'amber'] as const;
+      const id = newProfileId(input.role);
+      const member: Member = {
+        id,
+        family_id: actor?.family_id ?? db.families[0]?.id ?? '',
+        name,
+        role: input.role,
+        emoji: input.emoji.trim() || (input.role === 'parent' ? '🧑' : '🙂'),
+        color: colors[current.extraMembers.length % colors.length],
+        presets: [],
+        created_at: new Date().toISOString(),
+      };
+      const patch: Partial<AppSettings> = {
+        extraMembers: [...current.extraMembers, member].slice(0, 8),
+      };
+      if (input.pin) {
+        patch.profilePins = { ...current.profilePins, [id]: await hashPin(input.pin) };
+      }
+      const result = await saveSettingsAs(actor?.id ?? '', patch);
+      if (!result.ok) return { ok: false, error: result.error };
+
+      // 가족 DB 에 구성원을 만들 수 있으면(study_add_member 함수가 있으면) 공부까지 함께 저장됩니다.
+      if (cloud && modeRef.current === 'supabase' && actor) {
+        try {
+          const saved = await cloud.addMember(
+            actor.id,
+            { id: member.id, name: member.name, role: member.role, emoji: member.emoji },
+            sessionPinRef.current,
+          );
+          if (saved) {
+            dbRef.current = { ...dbRef.current, members: [...dbRef.current.members, saved] };
+            setDb(dbRef.current);
+          }
+        } catch (error) {
+          // 함수가 없거나(설정만 저장됨) 이름이 겹치는 경우 — 프로필은 설정 JSON 으로 계속 살아 있습니다.
+          console.warn('[study-check] 구성원 표에 새 프로필을 만들지 못했습니다', error);
+        }
+      }
+
+      return { ok: true, memberId: id };
+    },
+    [cloud, saveSettingsAs],
   );
 
   /** 📅 최근 12개월 월말 결산 — 이미 남긴 결산(난이도 바꿀 때 고정)이 있으면 그것을 그대로 보여 줍니다. */
@@ -1569,6 +1733,14 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       saveRewardSettings,
       appSettings,
       setMemberEmoji,
+      burstFactor: 1 + appSettings.burstPercent / 100,
+      burstFactorText: burstFactorLabel(appSettings.burstPercent),
+      profilePins: appSettings.profilePins,
+      hasProfilePin,
+      verifyProfilePin,
+      setProfilePin,
+      resetProfilePin,
+      createProfile,
       monthlySettlementsFor,
       settingsSync,
       saveAppSettings,
@@ -1622,6 +1794,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     sessionPin,
     localPinReady,
     setMemberEmoji,
+    hasProfilePin,
+    verifyProfilePin,
+    setProfilePin,
+    resetProfilePin,
+    createProfile,
     monthlySettlementsFor,
     displayMembers,
     unlockParent,

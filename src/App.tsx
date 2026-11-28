@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AdSlot } from './components/AdSlot';
 import { AppHeader } from './components/AppHeader';
 import { AddTaskSheet } from './components/AddTaskSheet';
 import { ChildBoard } from './components/ChildBoard';
@@ -7,6 +8,8 @@ import { DayOverview } from './components/DayOverview';
 import { FamilyNotesBoard } from './components/FamilyNotesBoard';
 import { ParentDashboard, ParentWeekSummary } from './components/ParentDashboard';
 import { ParentPinGate } from './components/ParentPinGate';
+import { ChildPinGate } from './components/ChildPinGate';
+import { ProfilePicker } from './components/ProfilePicker';
 import { OptionsPage } from './components/OptionsPage';
 import { ShopPage } from './components/ShopPage';
 import { TimerPanel } from './components/TimerPanel';
@@ -37,6 +40,27 @@ import type { NewTaskInput, Task } from './lib/types';
  */
 function isCallTask(task: Task): boolean {
   return task.title.includes('📞 통화') || task.id.includes('_call1') || task.id.includes('_call2');
+}
+
+/** 🚪 프로필 선택을 이번 방문에서 이미 했는지 — 앱을 새로 열면 다시 프로필부터 고릅니다. */
+const PROFILE_PICK_KEY = 'study-check.profile-picked.v1';
+
+function readPickedThisSession(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.sessionStorage.getItem(PROFILE_PICK_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markPickedThisSession(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(PROFILE_PICK_KEY, '1');
+  } catch {
+    /* 저장을 못해도 이번 화면은 그대로 진행합니다. */
+  }
 }
 
 /** 📱 뒤로가기로 앱을 닫으려 할 때 뜨는 확인 — 메인 화면과 부모 PIN 화면 양쪽에서 씁니다. */
@@ -152,12 +176,89 @@ export default function App() {
   }, [toast]);
 
   /* ---------------------------------------------------------------- */
+  /* 🚪 프로필 선택 (앱을 열면 PIN 보다 먼저) — 3번 · 12번                  */
+  /* ---------------------------------------------------------------- */
+
+  /** 이번 방문에서 프로필을 이미 골랐는지 — 아니면 프로필 선택 화면부터 */
+  const [profilePicked, setProfilePicked] = useState<boolean>(() => readPickedThisSession());
+  /** 프로필 선택 화면에서 부모 프로필을 눌렀을 때 (PIN 화면) */
+  const [pickerParentId, setPickerParentId] = useState<string | null>(null);
+  /** 프로필 선택 화면에서 아이 PIN 화면을 띄울 아이 */
+  const [pickerChildId, setPickerChildId] = useState<string | null>(null);
+
+  /** 그 프로필로 들어갑니다(이번 방문 기억). */
+  const enterAs = useCallback(
+    (memberId: string) => {
+      study.setCurrentMember(memberId);
+      markPickedThisSession();
+      setProfilePicked(true);
+      setPickerParentId(null);
+      setPickerChildId(null);
+    },
+    [study],
+  );
+
+  /** 프로필 카드를 눌렀을 때 — 부모·PIN 이 걸린 아이는 PIN 화면을 거집니다. */
+  const handlePickProfile = (memberId: string) => {
+    const member = study.members.find((item) => item.id === memberId);
+    if (!member) return;
+    if (member.role === 'parent') {
+      setPickerParentId(memberId);
+      return;
+    }
+    if (study.hasProfilePin(memberId)) {
+      setPickerChildId(memberId);
+      return;
+    }
+    enterAs(memberId);
+  };
+
+  /** + 새 프로필 만들기 — 부모 PIN 을 확인한 뒤 가족 설정 JSON 에 저장합니다. */
+  const handleCreateProfile = async (input: {
+    name: string;
+    emoji: string;
+    role: 'child' | 'parent';
+    pin: string;
+    parentPin: string;
+  }): Promise<{ ok: boolean; error?: string }> => {
+    const parent = study.parents[0] ?? study.members.find((member) => member.role === 'parent');
+    if (!parent) return { ok: false, error: '부모 프로필이 없어 새 프로필을 만들 수 없어요.' };
+
+    if (!study.parentPinSetupRequired) {
+      if (!/^\d{4}$/.test(input.parentPin)) {
+        return { ok: false, error: '부모 PIN 4자리를 넣어 주세요.' };
+      }
+      const unlocked = await study.unlockParent(input.parentPin);
+      if (!unlocked.ok) return { ok: false, error: unlocked.error ?? '부모 PIN이 맞지 않아요.' };
+    } else if (input.parentPin) {
+      // 이 기기에 아직 부모 PIN 이 없으면, 여기서 정해 둘 수 있습니다.
+      if (!/^\d{4}$/.test(input.parentPin)) return { ok: false, error: '부모 PIN은 4자리 숫자에요.' };
+      const setup = await study.setParentPin(input.parentPin);
+      if (!setup.ok) return { ok: false, error: setup.error };
+    }
+
+    const result = await study.createProfile(
+      {
+        name: input.name,
+        emoji: input.emoji,
+        role: input.role,
+        pin: input.pin || undefined,
+      },
+      parent.id,
+    );
+    if (result.ok && result.memberId) enterAs(result.memberId);
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  };
+
+  /* ---------------------------------------------------------------- */
   /* 📱 안드로이드 뒤로가기 — 창을 먼저 닫고, 메인 화면이면 종료 확인       */
   /* ---------------------------------------------------------------- */
 
   const exitOpenRef = useRef(false);
   exitOpenRef.current = exitOpen;
   const popHandlerRef = useRef<(() => void) | null>(null);
+  /** 우리가 쌓아 둔 히스토리 가드 기록 수 — [종료] 때 한 번에 되돌리는 데 씁니다. */
+  const guardDepthRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -165,7 +266,7 @@ export default function App() {
     /** 뒤로가기가 앱을 닫지 않고 우리가 잡을 수 있도록 기록을 하나 쌓아 둔다. */
     const pushGuard = () => {
       try {
-        window.history.pushState({ studyGuard: Date.now() }, '');
+        window.history.pushState({ studyGuard: (guardDepthRef.current += 1) }, '');
       } catch {
         /* 히스토리를 못 쓰는 환경(샌드박스·file://)에서는 그냥 두기 */
       }
@@ -174,6 +275,8 @@ export default function App() {
     pushGuard();
 
     const onPop = () => {
+      // 뒤로가기 한 번에 가드 기록 하나가 빠집니다.
+      guardDepthRef.current = Math.max(0, guardDepthRef.current - 1);
       // 1) 열려 있는 탭·모달이 있으면 그것만 먼저 닫는다.
       if (closeTopOverlay()) {
         pushGuard();
@@ -200,8 +303,11 @@ export default function App() {
 
   /**
    * [종료] — ① 설치형 앱에서는 창을 실제로 닫아 보고,
-   *        ② 안 닫히면 가드로 쌓아 둔 기록을 한 칸씩 되돌아 나가 이전 화면(또는 홈 화면)으로 나갑니다.
-   *        (기록 수를 세지 않아도 되게, 한 칸씩 뒤로 가며 페이지가 떠날 때까지 반복합니다)
+   *        ② 안 닫히면 가드로 쌓아 둔 기록을 **한 번에** 되돌린 뒤, 첫 화면에서 한 칸 더 나가 앱을 닫습니다.
+   *
+   * 예전엔 back() 을 150ms 간격으로 여러 번 불렀는데, 브라우저가 그중 하나만 처리해
+   * "한 번 더 눌러야 꺼지는" 증상이 생겼습니다. 지금은 쌓인 칸 수를 세어 go(-n) 한 번으로 돌아간 뒤,
+   * 앱의 첫 화면에서 back() 한 번으로 나갑니다.
    */
   const confirmExit = () => {
     setExitOpen(false);
@@ -215,26 +321,32 @@ export default function App() {
       /* 브라우저 탭이면 close 는 막혀 있습니다 — 아래에서 이전 화면으로 나갑니다. */
     }
 
+    const depth = guardDepthRef.current;
+    guardDepthRef.current = 0;
+
     window.setTimeout(() => {
-      let hops = 0;
-      const step = () => {
-        hops += 1;
-        if (hops > 30) {
-          // 여기까지 남아 있다면 돌아갈 기록이 없는 창입니다(첫 화면).
-          if (document.visibilityState === 'visible') {
-            setToast('이 창은 브라우저가 닫기를 막았어요 · 홈 버튼으로 앱을 닫아 주세요');
-          }
-          return;
+      if (document.visibilityState !== 'visible') return;
+      if (depth > 0) {
+        try {
+          window.history.go(-depth);
+        } catch {
+          /* 기록을 못 다루는 환경 */
         }
+      }
+      window.setTimeout(() => {
+        if (document.visibilityState !== 'visible') return;
         try {
           window.history.back();
         } catch {
           /* 기록을 못 다루는 환경 */
         }
-        window.setTimeout(step, 150);
-      };
-      step();
-    }, 220);
+        window.setTimeout(() => {
+          if (document.visibilityState === 'visible') {
+            setToast('이 창은 브라우저가 닫기를 막았어요 · 홈 버튼으로 앱을 닫아 주세요');
+          }
+        }, 800);
+      }, 260);
+    }, 140);
   };
 
   useOverlayBack(profileOpen, () => setProfileOpen(false));
@@ -493,7 +605,7 @@ export default function App() {
       const parts = [`완료! ${time}`];
       if (change.itemDelta > 0) {
         parts.push(`+${formatXp(change.itemDelta)} XP`);
-        if (change.item.burst) parts.push('🔥 버스트 2배');
+        if (change.item.burst) parts.push(`🔥 버스트 ${study.burstFactorText}`);
         else if (change.item.percent < 100) parts.push(change.item.label);
       }
       // ⑤ 연속 달성 보너스는 🐣 쪼꼬 한마디로 따로 알리고, 나머지(100%·연속)만 여기에 적습니다.
@@ -585,6 +697,71 @@ export default function App() {
     ? (visibleMembers[0]?.id ?? currentMember.id)
     : currentMember.id;
 
+  /* 🚪 앱을 열면 프로필 선택 화면부터 — 골라 들어가기 전에는 메인을 그리지 않습니다. */
+  if (!profilePicked) {
+    const pickerTarget = pickerParentId ? study.members.find((member) => member.id === pickerParentId) ?? null : null;
+    const pickerChild = pickerChildId ? study.members.find((member) => member.id === pickerChildId) ?? null : null;
+    return (
+      <div className="min-h-screen bg-[#f5f6fa]">
+        <ProfilePicker
+          familyName={study.familyName}
+          members={study.members}
+          hasPin={study.hasProfilePin}
+          onPick={handlePickProfile}
+          parentPinSetupRequired={study.parentPinSetupRequired}
+          onCreate={handleCreateProfile}
+        />
+
+        {pickerTarget ? (
+          <div data-testid="picker-parent-gate" className="fixed inset-0 z-[65] overflow-y-auto bg-[#f5f6fa]">
+            <ParentPinGate
+              familyName={study.familyName}
+              mode={study.parentPinSetupRequired ? 'setup' : 'unlock'}
+              targetName={pickerTarget.name}
+              children={study.children}
+              onSubmit={async (pin) => {
+                const result = study.parentPinSetupRequired
+                  ? await study.setParentPin(pin)
+                  : await study.unlockParent(pin);
+                if (result.ok) enterAs(pickerTarget.id);
+                return result;
+              }}
+              onSwitchChild={(memberId) => enterAs(memberId)}
+              onCancel={() => setPickerParentId(null)}
+            />
+          </div>
+        ) : null}
+
+        {pickerChild ? (
+          <div data-testid="picker-child-gate" className="fixed inset-0 z-[65] overflow-y-auto bg-[#f5f6fa]">
+            <ChildPinGate
+              familyName={study.familyName}
+              name={pickerChild.name}
+              emoji={pickerChild.emoji}
+              onSubmit={async (pin) => {
+                const result = await study.verifyProfilePin(pickerChild.id, pin);
+                if (result.ok) enterAs(pickerChild.id);
+                return result;
+              }}
+              onCancel={() => setPickerChildId(null)}
+            />
+          </div>
+        ) : null}
+
+        {/* 📱 뒤로가기 — 프로필 선택 화면에서도 「앱을 종료하시겠습니까?」가 떠야 합니다. */}
+        {exitOpen ? <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={confirmExit} /> : null}
+
+        {toast ? (
+          <div className="pointer-events-none fixed inset-x-0 bottom-8 z-40 flex justify-center px-6">
+            <div className="animate-toast-in max-w-full truncate rounded-full bg-slate-900/90 px-4 py-2.5 text-[11.5px] font-bold text-white shadow-lg">
+              {toast}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   if (parentLocked) {
     return (
       <div className="min-h-screen bg-[#f5f6fa]">
@@ -644,7 +821,7 @@ export default function App() {
             </span>
             <p className="text-[11.5px] font-extrabold leading-tight">
               버스트 타임 진행 중!
-              <span className="ml-1 font-bold text-white/80">경험치 2배</span>
+              <span className="ml-1 font-bold text-white/80">경험치 {study.burstFactorText}</span>
             </p>
           </div>
         ) : null}
@@ -750,6 +927,9 @@ export default function App() {
         />
 
         <DayOverview dateIso={selectedDate} summary={daySummary} memberSummaries={dayMemberStats} />
+
+        {/* 📢 광고 슬롯 자리(13번) — 지금은 화면에 아무것도 보이지 않습니다(추후 상용화 때 배너). */}
+        <AdSlot where="main" />
 
         {/* 📊 엄마·아빠 전용 — 이번 주 간단 요약(누르면 상세 대시보드). 아이 화면에는 없습니다. */}
         {isParent ? <ParentWeekSummary onOpen={() => setDashboardOpen(true)} /> : null}
@@ -982,6 +1162,9 @@ export default function App() {
         onLock={lockParent}
         onRename={renameMember}
         onSetEmoji={study.setMemberEmoji}
+        onSetProfilePin={study.setProfilePin}
+        onResetProfilePin={study.resetProfilePin}
+        hasProfilePin={study.hasProfilePin}
         onResetDemo={async () => {
           const result = await resetDemo();
           notify(result.ok ? '샘플 데이터로 되돌렸어요' : result.error ?? '초기화하지 못했어요');

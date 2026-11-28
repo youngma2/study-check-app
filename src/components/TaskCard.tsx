@@ -108,7 +108,7 @@ export function TaskCard({
                   data-testid="task-xp"
                   title={
                     xp.burst
-                      ? `🔥 버스트 타임(경험치 2배) — ${xp.label}`
+                      ? `🔥 버스트 타임(경험치 ${study.burstFactorText}) — ${xp.label}`
                       : xp.percent === 100
                         ? '그 날 완료해서 XP 100%'
                         : `${xp.label} — 그 날 완료했다면 ${XP_PER_TASK} XP`

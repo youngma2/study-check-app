@@ -24,6 +24,11 @@ interface ProfileSheetProps {
   onRename: (memberId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
   /** 🖼 프로필 아이콘 바꾸기 (부모·PIN 만) */
   onSetEmoji: (memberId: string, emoji: string) => Promise<{ ok: boolean; error?: string }>;
+  /** 🔐 아이 프로필 개인 PIN 정하기·바꾸기 (부모·PIN 만) */
+  onSetProfilePin: (memberId: string, pin: string) => Promise<{ ok: boolean; error?: string }>;
+  /** 🔐 아이 프로필 개인 PIN 초기화(지우기) — 부모·PIN 만 */
+  onResetProfilePin: (memberId: string) => Promise<{ ok: boolean; error?: string }>;
+  hasProfilePin: (memberId: string) => boolean;
   onResetDemo: () => void | Promise<void>;
   canReset: boolean;
   storageKind: 'local' | 'supabase';
@@ -82,6 +87,9 @@ export function ProfileSheet({
   onLock,
   onRename,
   onSetEmoji,
+  onSetProfilePin,
+  onResetProfilePin,
+  hasProfilePin,
   onResetDemo,
   canReset,
   storageKind,
@@ -99,6 +107,11 @@ export function ProfileSheet({
   const [emojiDraft, setEmojiDraft] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** 🔐 프로필 PIN 정하는 중인 아이 · 입력값 */
+  const [pinEditingId, setPinEditingId] = useState<string | null>(null);
+  const [pinDraft, setPinDraft] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [pinSaving, setPinSaving] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -106,8 +119,41 @@ export function ProfileSheet({
       setDraft('');
       setEmojiDraft('');
       setRenameError(null);
+      setPinEditingId(null);
+      setPinDraft('');
+      setPinError(null);
     }
   }, [open]);
+
+  /** 🔐 아이 PIN 저장 */
+  const submitPin = async (memberId: string) => {
+    if (pinSaving) return;
+    if (!/^\d{4}$/.test(pinDraft)) {
+      setPinError('PIN은 4자리 숫자로 정해 주세요.');
+      return;
+    }
+    setPinSaving(true);
+    setPinError(null);
+    const result = await onSetProfilePin(memberId, pinDraft);
+    setPinSaving(false);
+    if (!result.ok) {
+      setPinError(result.error ?? 'PIN을 저장하지 못했어요.');
+      return;
+    }
+    setPinEditingId(null);
+    setPinDraft('');
+  };
+
+  /** 🔐 아이 PIN 초기화 */
+  const clearPin = async (memberId: string) => {
+    if (pinSaving) return;
+    if (!window.confirm('이 프로필의 PIN을 지울까요? 지우면 PIN 없이 들어갑니다.')) return;
+    setPinSaving(true);
+    setPinError(null);
+    const result = await onResetProfilePin(memberId);
+    setPinSaving(false);
+    if (!result.ok) setPinError(result.error ?? 'PIN을 초기화하지 못했어요.');
+  };
 
   const startRename = (member: Member) => {
     setEditingId(member.id);
@@ -334,6 +380,92 @@ export function ProfileSheet({
           <p className="mb-1.5 px-1 text-[10px] font-extrabold tracking-wide text-slate-400">아이</p>
           <div className="space-y-1.5">{children.map(renderRow)}</div>
         </div>
+
+        {viewerIsParent ? (
+          <div data-testid="profile-pin-settings" className="rounded-2xl bg-white px-3 py-2.5 ring-1 ring-slate-900/5">
+            <p className="text-[10px] font-extrabold tracking-wide text-slate-400">🔐 아이 프로필 PIN</p>
+            <p className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-500">
+              아이도 자기 4자리 PIN으로 들어갈 수 있어요. 잊으면 여기서 초기화하면 다음부터 PIN 없이 들어갑니다.
+              (가족 설정에 해시로만 저장 — 추가 SQL 없이 폰끼리 함께 씀)
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {children.map((member) => {
+                const has = hasProfilePin(member.id);
+                const editing = pinEditingId === member.id;
+                return (
+                  <li key={member.id} data-testid={`pin-row-${member.id}`} className="rounded-xl bg-slate-50 px-2 py-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span aria-hidden className="text-[14px]">{member.emoji}</span>
+                      <span className="min-w-0 flex-1 truncate text-[11px] font-extrabold text-slate-700">
+                        {member.name}
+                      </span>
+                      <span
+                        data-testid={`pin-state-${member.id}`}
+                        className={cx(
+                          'shrink-0 rounded-full px-1.5 py-0.5 text-[8.5px] font-extrabold ring-1',
+                          has
+                            ? 'bg-emerald-50 text-emerald-600 ring-emerald-200/70'
+                            : 'bg-slate-100 text-slate-400 ring-slate-200',
+                        )}
+                      >
+                        {has ? 'PIN 있음' : 'PIN 없음'}
+                      </span>
+                      <button
+                        type="button"
+                        data-testid={`pin-set-${member.id}`}
+                        onClick={() => {
+                          setPinEditingId(editing ? null : member.id);
+                          setPinDraft('');
+                          setPinError(null);
+                        }}
+                        className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-extrabold text-slate-600 ring-1 ring-slate-200 transition active:scale-95"
+                      >
+                        {editing ? '취소' : has ? '바꾸기' : '정하기'}
+                      </button>
+                      {has ? (
+                        <button
+                          type="button"
+                          data-testid={`pin-reset-${member.id}`}
+                          onClick={() => void clearPin(member.id)}
+                          disabled={pinSaving}
+                          className="shrink-0 rounded-full bg-rose-50 px-2 py-1 text-[9px] font-extrabold text-rose-500 ring-1 ring-rose-100 transition active:scale-95 disabled:opacity-50"
+                        >
+                          초기화
+                        </button>
+                      ) : null}
+                    </div>
+                    {editing ? (
+                      <div className="mt-1 flex items-center gap-1">
+                        <input
+                          data-testid={`pin-input-${member.id}`}
+                          value={pinDraft}
+                          inputMode="numeric"
+                          maxLength={4}
+                          onChange={(event) => setPinDraft(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') void submitPin(member.id);
+                          }}
+                          placeholder="4자리 숫자"
+                          className="min-w-0 flex-1 rounded-lg bg-white px-2 py-1.5 text-[11.5px] font-extrabold tabular-nums text-slate-800 outline-none ring-1 ring-slate-200 placeholder:text-slate-300"
+                        />
+                        <button
+                          type="button"
+                          data-testid={`pin-save-${member.id}`}
+                          onClick={() => void submitPin(member.id)}
+                          disabled={pinSaving}
+                          className="shrink-0 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-extrabold text-white transition active:scale-95 disabled:opacity-50"
+                        >
+                          저장
+                        </button>
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
+            {pinError ? <p className="mt-1 px-1 text-[10px] font-bold text-rose-500">{pinError}</p> : null}
+          </div>
+        ) : null}
 
         {viewerIsParent ? (
           <div data-testid="reward-settings" className="rounded-2xl bg-white px-3 py-2.5 ring-1 ring-slate-900/5">

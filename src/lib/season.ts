@@ -42,8 +42,10 @@ export interface XpRules {
   streakBonuses?: StreakBonus[];
   /** 🔥 자동 버스트 타임 — 월말 며칠 전부터(0 이면 자동 없음) */
   burstAutoDays?: number;
-  /** 수동·자동이 겹칠 때 4배까지 (끄면 2배 한 번) */
+  /** 수동·자동이 겹칠 때 배수를 한 번 더 곱할지(100% → 4배) */
   burstOverlap?: boolean;
+  /** 🔥 버스트 타임 배수(%) — 25·50·75·100(기본 2배) */
+  burstPercent?: number;
   /** 자동 버스트 타임을 켠 날 — 이 날 이전에는 소급 적용하지 않습니다. */
   burstAutoFrom?: string | null;
   /** 🏆 티어 난이도(%) — 0 이 기본 기준 */
@@ -103,8 +105,10 @@ export interface TaskXp {
   label: string;
   /** 완료 시각 기록이 없어 due_date 로 대신한 예전 행인지 */
   legacy: boolean;
-  /** 🔥 버스트 타임(경험치 2배)이 적용됐는지 */
+  /** 🔥 버스트 타임(경험치 배수)이 적용됐는지 */
   burst: boolean;
+  /** 🔥 적용된 배수 — 1 이면 버스트 아님(1.25 · 1.5 · 1.75 · 2 · 겹치면 4) */
+  burstFactor: number;
 }
 
 /**
@@ -140,6 +144,7 @@ export function xpForTask(
     autoDays: rules?.burstAutoDays ?? 0,
     overlap: rules?.burstOverlap ?? false,
     autoFrom: rules?.burstAutoFrom ?? null,
+    percent: rules?.burstPercent ?? 100,
   });
   return {
     delayDays,
@@ -149,6 +154,7 @@ export function xpForTask(
     label: delayLabel(delayDays),
     legacy: completion.legacy,
     burst: multiplier > 1,
+    burstFactor: multiplier,
   };
 }
 

@@ -1,5 +1,5 @@
 import { koreaISODateOf } from './date';
-import type { TaskPreset } from './types';
+import type { Member, MemberColor, TaskPreset } from './types';
 
 /**
  * ⚙️ 앱 설정 — 부모 관리(PIN)에서 바꾸는 것들
@@ -14,7 +14,11 @@ import type { TaskPreset } from './types';
  * 그래도 앱은 에러 없이 그대로 동작하고, 화면에 '이 폰에만 적용' 이라고 알려 줍니다.
  */
 
-export type RoutineKey = 'semester' | 'vacation' | 'exam';
+/**
+ * 프리셋 열쇠 — 기본 3개(semester·vacation·exam)에 더해, 부모가 만든 프리셋은 `p_...` 열쇠를 씁니다.
+ * (그래서 RoutineKey 는 union 이 아니라 string 입니다)
+ */
+export type RoutineKey = string;
 
 export const ROUTINE_PRESETS: Array<{ key: RoutineKey; label: string; emoji: string }> = [
   { key: 'semester', label: '학기중(평일)', emoji: '📚' },
@@ -22,7 +26,46 @@ export const ROUTINE_PRESETS: Array<{ key: RoutineKey; label: string; emoji: str
   { key: 'exam', label: '시험기간', emoji: '📝' },
 ];
 
-/** 🔥 경험치 2배가 적용되는 시간대 — 부모가 켠 때부터 끌 때까지 */
+/** 부모가 만든 프리셋 열쇠의 앞자리 */
+export const CUSTOM_PRESET_PREFIX = 'p_';
+
+/** 그 열쇠가 기본 프리셋인지 */
+export function isBuiltinPreset(key: string): boolean {
+  return ROUTINE_PRESETS.some((preset) => preset.key === key);
+}
+
+export interface PresetMeta {
+  key: string;
+  label: string;
+  emoji: string;
+  /** 부모가 + 프리셋 추가로 만든 것 */
+  custom: boolean;
+}
+
+/** 화면에 보여 줄 프리셋 목록 — 기본 3개 먼저, 그 뒤에 부모가 만든 프리셋(만든 순서대로) */
+export function presetMetas(settings: AppSettings): PresetMeta[] {
+  const builtins: PresetMeta[] = ROUTINE_PRESETS.map((preset) => ({ ...preset, custom: false }));
+  const customs: PresetMeta[] = Object.keys(settings.presets)
+    .filter((key) => !isBuiltinPreset(key))
+    .map((key) => ({
+      key,
+      label: settings.presets[key]?.label || '새 프리셋',
+      emoji: '📌',
+      custom: true,
+    }));
+  return [...builtins, ...customs];
+}
+
+/** 🔥 버스트 타임 배수 버튼 — 1.25배(+25%) · 1.5배(+50%) · 1.75배(+75%) · 2배(+100%, 기본) */
+export const BURST_PERCENT_OPTIONS = [25, 50, 75, 100] as const;
+
+/** 25 → '1.25배' 처럼 읽기 좋게 */
+export function burstFactorLabel(percent: number): string {
+  const factor = Math.round((1 + Math.max(0, percent) / 100) * 100) / 100;
+  return `${factor}배`;
+}
+
+/** 🔥 경험치 배수가 적용되는 시간대 — 부모가 켠 때부터 끌 때까지 */
 export interface BurstWindow {
   /** ISO 시각 */
   from: string;
@@ -113,8 +156,10 @@ export interface AppSettings {
   burstAuto: boolean;
   /** 자동 설정이 시작되는 날 — 월말까지 남은 일수가 이 값보다 작으면 켜집니다(기본 7일) */
   burstAutoDays: number;
-  /** 수동·자동이 겹칠 때 2배를 또 곱할지(4배) — 끄면 최대 2배까지만 */
+  /** 수동·자동이 겹칠 때 배수를 또 곱할지(100%면 4배) — 끄면 한 번만 */
   burstOverlap: boolean;
+  /** 🔥 버스트 타임 경험치 배수(%) — 25·50·75·100(기본 2배) */
+  burstPercent: number;
   /** 🎁 뽑기 상자 보상 목록 (분·포인트) */
   boxRewards: BoxReward[];
   /** 켜 둔 시간대들 — 완료 시각이 이 안에 있으면 XP 2배(끈 뒤에도 그대로 유지) */
@@ -135,8 +180,18 @@ export interface AppSettings {
   burstAutoFrom: string | null;
   /** 🖼 아이 프로필 아이콘 바꾸기 (memberId → 이모지) */
   profileEmoji: Record<string, string>;
+  /** 🆕 부모가 만든 프로필 — DB 구성원(family_members)에 더해 화면에 함께 보입니다(추가 SQL 없음). */
+  extraMembers: Member[];
+  /** 🔐 프로필별 4자리 PIN — 평문은 저장하지 않고 솔트+해시만 둡니다(가족 설정 JSON). */
+  profilePins: Record<string, ProfilePin>;
   /** 📅 월말 결산에 남긴 지난달 기록 (memberId → season → 결산) */
   settlements: Record<string, Record<string, Settlement>>;
+}
+
+/** 프로필 PIN 한 개 — 솔트와 해시(평문 없음) */
+export interface ProfilePin {
+  salt: string;
+  hash: string;
 }
 
 export const DEFAULT_STREAK_BONUSES: StreakBonus[] = [
@@ -166,6 +221,7 @@ export function defaultAppSettings(): AppSettings {
     burstAuto: false,
     burstAutoDays: 7,
     burstOverlap: false,
+    burstPercent: 100,
     boxRewards: DEFAULT_BOX_REWARDS.map((reward) => ({ ...reward })),
     burstWindows: [],
     streakBonuses: [...DEFAULT_STREAK_BONUSES],
@@ -176,8 +232,20 @@ export function defaultAppSettings(): AppSettings {
     tierDifficulty: 5,
     burstAutoFrom: null,
     profileEmoji: {},
+    extraMembers: [],
+    profilePins: {},
     settlements: {},
   };
+}
+
+/** 부모가 만든 프로필 id — 기본 구성원(mem_dad·mem_child1…)과 겹치지 않게 */
+export function newProfileId(role: 'parent' | 'child'): string {
+  return `mem_${role === 'parent' ? 'p' : 'c'}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+}
+
+/** 부모가 만든 프리셋 열쇠 */
+export function newPresetKey(): string {
+  return `${CUSTOM_PRESET_PREFIX}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 4)}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -323,34 +391,51 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       })
     : [];
 
-  const presets = emptyRoutines();
-  if (raw.presets && typeof raw.presets === 'object') {
-    for (const preset of ROUTINE_PRESETS) {
-      const entry = (raw.presets as Record<string, unknown>)[preset.key];
-      if (!entry || typeof entry !== 'object') continue;
-      const value = entry as { items?: unknown; routines?: unknown };
-      const items: Record<string, RoutineItem[]> = {};
-      // 새 모양(items)을 먼저 읽고, 예전 모양(routines)이 있으면 합칩니다.
-      if (value.items && typeof value.items === 'object') {
-        for (const [memberId, list] of Object.entries(value.items as Record<string, unknown>)) {
-          const parsed = toRoutineItems(list);
-          if (parsed.length > 0) items[memberId] = parsed;
-        }
+  /** 한 프리셋의 아이별 항목 묶음 읽기(새 모양 + 예전 모양) */
+  const parsePresetItems = (entry: unknown): Record<string, RoutineItem[]> => {
+    const items: Record<string, RoutineItem[]> = {};
+    if (!entry || typeof entry !== 'object') return items;
+    const value = entry as { items?: unknown; routines?: unknown };
+    // 새 모양(items)을 먼저 읽고, 예전 모양(routines)이 있으면 합칩니다.
+    if (value.items && typeof value.items === 'object') {
+      for (const [memberId, list] of Object.entries(value.items as Record<string, unknown>)) {
+        const parsed = toRoutineItems(list);
+        if (parsed.length > 0) items[memberId] = parsed;
       }
-      if (value.routines && typeof value.routines === 'object') {
-        for (const [memberId, weekdays] of Object.entries(value.routines as Record<string, unknown>)) {
-          const parsed = toRoutineItems(weekdays);
-          if (parsed.length === 0) continue;
-          items[memberId] = mergeRoutineItems(items[memberId] ?? [], parsed);
-        }
-      }
-      presets[preset.key] = { label: preset.label, items };
     }
+    if (value.routines && typeof value.routines === 'object') {
+      for (const [memberId, weekdays] of Object.entries(value.routines as Record<string, unknown>)) {
+        const parsed = toRoutineItems(weekdays);
+        if (parsed.length === 0) continue;
+        items[memberId] = mergeRoutineItems(items[memberId] ?? [], parsed);
+      }
+    }
+    return items;
+  };
+
+  const presets: Record<string, RoutineSet> = emptyRoutines();
+  const rawPresets =
+    raw.presets && typeof raw.presets === 'object' ? (raw.presets as Record<string, unknown>) : {};
+  for (const preset of ROUTINE_PRESETS) {
+    const entry = rawPresets[preset.key];
+    if (!entry || typeof entry !== 'object') continue;
+    presets[preset.key] = { label: preset.label, items: parsePresetItems(entry) };
+  }
+  // 부모가 만든 프리셋 — 이름이 있는 것만, 최대 12개까지 그대로 살립니다(지운 것은 여기서 사라짐).
+  let customPresets = 0;
+  for (const [key, entry] of Object.entries(rawPresets)) {
+    if (isBuiltinPreset(key) || customPresets >= 12) continue;
+    if (!/^p_[a-z0-9_]+$/i.test(key) || !entry || typeof entry !== 'object') continue;
+    const label = typeof (entry as { label?: unknown }).label === 'string'
+      ? String((entry as { label?: string }).label).trim().slice(0, 20)
+      : '';
+    if (!label) continue;
+    presets[key] = { label, items: parsePresetItems(entry) };
+    customPresets += 1;
   }
 
-  const activePreset = ROUTINE_PRESETS.some((preset) => preset.key === raw.activePreset)
-    ? (raw.activePreset as RoutineKey)
-    : 'semester';
+  const activePreset =
+    typeof raw.activePreset === 'string' && presets[raw.activePreset] ? raw.activePreset : 'semester';
 
   const timeUsage: TimeUsage[] = Array.isArray(raw.timeUsage)
     ? raw.timeUsage.flatMap((item) => {
@@ -433,6 +518,57 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     }
   }
 
+  // 🆕 부모가 만든 프로필 — 역할·이름·아이콘만 살립니다(추가 SQL 없이 가족 설정 JSON 에 둡니다).
+  const extraMembers: Member[] = Array.isArray(raw.extraMembers)
+    ? raw.extraMembers.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const member = item as Partial<Member>;
+        const id = typeof member.id === 'string' ? member.id.trim() : '';
+        const name = typeof member.name === 'string' ? member.name.trim().slice(0, 20) : '';
+        if (!/^mem_[a-z0-9_]{2,40}$/i.test(id) || !name) return [];
+        const color: MemberColor = (['sky', 'violet', 'rose', 'amber'] as const).includes(
+          member.color as MemberColor,
+        )
+          ? (member.color as MemberColor)
+          : 'sky';
+        return [
+          {
+            id,
+            family_id: typeof member.family_id === 'string' ? member.family_id : '',
+            name,
+            role: member.role === 'parent' ? ('parent' as const) : ('child' as const),
+            grade: typeof member.grade === 'string' && member.grade.trim() ? member.grade.trim().slice(0, 10) : undefined,
+            emoji: typeof member.emoji === 'string' && member.emoji.trim() ? member.emoji.trim().slice(0, 8) : '🙂',
+            color,
+            presets: [],
+            created_at: isIsoLike(member.created_at) ? member.created_at : new Date().toISOString(),
+          },
+        ];
+      })
+    : [];
+  const extraMemberIds = new Set<string>();
+  const keptExtraMembers = extraMembers.filter((member) => {
+    if (extraMemberIds.has(member.id)) return false;
+    extraMemberIds.add(member.id);
+    return true;
+  }).slice(0, 8);
+
+  // 🔐 프로필 PIN — 솔트·해시(16진수)만 둡니다.
+  const profilePins: Record<string, ProfilePin> = {};
+  if (raw.profilePins && typeof raw.profilePins === 'object') {
+    for (const [memberId, value] of Object.entries(raw.profilePins as Record<string, unknown>)) {
+      if (!/^mem_[a-z0-9_]{2,40}$/i.test(memberId) || !value || typeof value !== 'object') continue;
+      const pin = value as Partial<ProfilePin>;
+      if (typeof pin.salt !== 'string' || !/^[0-9a-f]{8,64}$/i.test(pin.salt)) continue;
+      if (typeof pin.hash !== 'string' || !/^[0-9a-f]{16,128}$/i.test(pin.hash)) continue;
+      profilePins[memberId] = { salt: pin.salt, hash: pin.hash };
+    }
+  }
+
+  const burstPercent = (BURST_PERCENT_OPTIONS as readonly number[]).includes(raw.burstPercent as number)
+    ? (raw.burstPercent as number)
+    : 100;
+
   const rawAutoFrom = typeof raw.burstAutoFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.burstAutoFrom)
     ? raw.burstAutoFrom
     : null;
@@ -444,6 +580,7 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     burstAuto: raw.burstAuto === true,
     burstAutoDays: autoDays,
     burstOverlap: raw.burstOverlap === true,
+    burstPercent,
     // 목록을 다 지운 경우에는 상자가 아무것도 주지 않게 되므로 기본 보상으로 돌아갑니다.
     boxRewards:
       Array.isArray(raw.boxRewards) && boxRewards.length > 0
@@ -462,6 +599,8 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     // 자동 버스트 타임은 켠 날부터만 적용합니다 — 날짜가 없던 예전 값은 오늘부터로 잡습니다.
     burstAutoFrom,
     profileEmoji,
+    extraMembers: keptExtraMembers,
+    profilePins,
     settlements,
   };
 }
@@ -541,6 +680,69 @@ export function withRoutineItems(
   };
 }
 
+/** 📌 프리셋 하나를 만듭니다(이름만 정하면 비어 있는 목록으로 시작). */
+export function addCustomPreset(
+  settings: AppSettings,
+  label: string,
+): { settings: AppSettings; key: string } {
+  const clean = label.trim().slice(0, 20) || '새 프리셋';
+  const key = newPresetKey();
+  return {
+    key,
+    settings: {
+      ...settings,
+      presets: { ...settings.presets, [key]: { label: clean, items: {} } },
+    },
+  };
+}
+
+/** 📌 프리셋 이름 바꾸기 (기본 프리셋은 이름을 고정합니다) */
+export function renameCustomPreset(settings: AppSettings, key: string, label: string): AppSettings {
+  if (isBuiltinPreset(key)) return settings;
+  const preset = settings.presets[key];
+  if (!preset) return settings;
+  const clean = label.trim().slice(0, 20);
+  if (!clean) return settings;
+  return { ...settings, presets: { ...settings.presets, [key]: { ...preset, label: clean } } };
+}
+
+/** 📌 프리셋 지우기 (기본 프리셋은 지울 수 없고, 지금 쓰는 프리셋이면 학기중으로 돌립니다) */
+export function removeCustomPreset(settings: AppSettings, key: string): AppSettings {
+  if (isBuiltinPreset(key) || !settings.presets[key]) return settings;
+  const presets = { ...settings.presets };
+  delete presets[key];
+  return {
+    ...settings,
+    presets,
+    activePreset: settings.activePreset === key ? 'semester' : settings.activePreset,
+  };
+}
+
+/**
+ * 📥 한 항목을 다른 프리셋으로 바로 넣기(복사).
+ * 같은 공부(제목+과목)가 이미 있으면 적용 요일만 합치고, 부모 확인 표시는 켜진 쪽을 따릅니다.
+ */
+export function copyRoutineItemToPreset(
+  settings: AppSettings,
+  item: RoutineItem,
+  memberId: string,
+  targetKey: string,
+): AppSettings {
+  const target = settings.presets[targetKey];
+  if (!target) return settings;
+  const existing = [...(target.items[memberId] ?? [])].sort((a, b) => a.order - b.order);
+  const merged = mergeRoutineItems(existing, [
+    { ...item, days: item.days.length > 0 ? [...item.days] : [0, 1, 2, 3, 4, 5, 6] },
+  ]);
+  return {
+    ...settings,
+    presets: {
+      ...settings.presets,
+      [targetKey]: { ...target, items: { ...target.items, [memberId]: merged } },
+    },
+  };
+}
+
 /** 🔥 버스트 타임을 켜고 끕니다 — 시간대를 함께 남겨, 끈 뒤에도 그때 완료한 XP 는 2배로 남습니다. */
 export function toggleBurst(settings: AppSettings, on: boolean, now: Date = new Date()): AppSettings {
   const iso = now.toISOString();
@@ -594,13 +796,14 @@ export function autoBurstOn(iso: string, days: number, from: string | null = nul
 }
 
 /**
- * 완료한 시각의 버스트 배율 — 1 · 2 · 4.
- * · 수동(켜 둔 시간대)과 자동(월말)이 겹치면 overlap 이 켜져 있을 때만 4배, 아니면 2배 한 번입니다.
+ * 완료한 시각의 버스트 배율 — 1 · 1.25 · 1.5 · 1.75 · 2 (겹치면 ×2).
+ * · percent 는 부모 옵션에서 고른 배수(100 = 2배).
+ * · 수동(켜 둔 시간대)과 자동(월말)이 겹치면 overlap 이 켜져 있을 때만 배수를 한 번 더 곱합니다(100% → 4배).
  */
 export function burstMultiplierAt(
   iso: string | null | undefined,
   windows: BurstWindow[],
-  options: { autoDays?: number; overlap?: boolean; autoFrom?: string | null } = {},
+  options: { autoDays?: number; overlap?: boolean; autoFrom?: string | null; percent?: number } = {},
 ): number {
   if (!iso) return 1;
   const time = Date.parse(iso);
@@ -623,8 +826,14 @@ export function burstMultiplierAt(
   const auto =
     autoDays > 0 && isoDate !== null && autoBurstOn(isoDate, autoDays, options.autoFrom ?? null);
 
-  if (manual && auto) return options.overlap ? 4 : 2;
-  return manual || auto ? 2 : 1;
+  const percent = (BURST_PERCENT_OPTIONS as readonly number[]).includes(options.percent as number)
+    ? (options.percent as number)
+    : 100;
+  const factor = 1 + percent / 100;
+  const round = (value: number) => Math.round(value * 100) / 100;
+
+  if (manual && auto) return options.overlap ? round(factor * factor) : factor;
+  return manual || auto ? factor : 1;
 }
 
 /** 지금(오늘) 버스트 타임이 켜져 있는지 — 화면 배너에 씁니다. */

@@ -20,6 +20,8 @@ export function TierPanel({ member }: { member: Member }) {
   const lastSeason = study.lastSeasonFor(member.id);
   /** 🎁 3택1 팝업 — 지금 열고 있는 상자 */
   const [gift, setGift] = useState<TierEvent | null>(null);
+  /** 5번 — 뽑기 상자 내역은 기본 3개, [자세히]로 전부 */
+  const [allBoxes, setAllBoxes] = useState(false);
 
   if (member.role !== 'child' || !stats) return null;
 
@@ -27,11 +29,12 @@ export function TierPanel({ member }: { member: Member }) {
   const span = level.nextXp === null ? 1 : Math.max(level.nextXp - level.minXp, 1);
   const ratio = level.nextXp === null ? 1 : Math.min(1, Math.max(0, (xp - level.minXp) / span));
   const remaining = level.nextXp === null ? 0 : Math.max(level.nextXp - xp, 0);
-  const boxes = study
+  const everyBox = study
     .tierEventsFor(member.id)
     .filter((event) => event.season === stats.season && event.box_minutes !== null)
     .reverse();
-  const unopened = boxes.filter((box) => !box.opened_at).length;
+  const boxes = allBoxes ? everyBox : everyBox.slice(0, 3);
+  const unopened = everyBox.filter((box) => !box.opened_at).length;
   /** ⑤ 연속 달성 — 지금까지 채운 기준·다음 기준 */
   const streakReached = reachedStreakBonus(stats.streak, study.appSettings.streakBonuses);
   const streakNext = nextStreakBonus(stats.streak, study.appSettings.streakBonuses);
@@ -125,9 +128,22 @@ export function TierPanel({ member }: { member: Member }) {
         <div className="mt-2 border-t border-slate-900/5 pt-2">
           <div className="flex items-center justify-between px-0.5">
             <p className="text-[9.5px] font-extrabold tracking-wide text-slate-400">🎁 뽑기 상자</p>
-            <p className="text-[9px] font-bold text-slate-400">
-              {unopened > 0 ? `${unopened}개 남음 · 눌러서 열기` : '큰 티어 승급마다 1개'}
-            </p>
+            <div className="flex items-center gap-1">
+              <p className="text-[9px] font-bold text-slate-400">
+                {unopened > 0 ? `${unopened}개 남음 · 눌러서 열기` : '큰 티어 승급마다 1개'}
+              </p>
+              {everyBox.length > 3 ? (
+                <button
+                  type="button"
+                  data-testid={`boxes-toggle-${member.id}`}
+                  onClick={() => setAllBoxes((prev) => !prev)}
+                  aria-expanded={allBoxes}
+                  className="shrink-0 rounded-full bg-slate-100 px-1.5 py-0.5 text-[8.5px] font-extrabold text-slate-500 transition active:scale-95"
+                >
+                  {allBoxes ? '접기' : `자세히 ${everyBox.length}`}
+                </button>
+              ) : null}
+            </div>
           </div>
           <div className="no-scrollbar mt-1.5 flex gap-1.5 overflow-x-auto pb-0.5">
             {boxes.map((box) => (
@@ -238,7 +254,7 @@ function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => 
     setError(null);
     const result = await study.useReward(event.id);
     setBusy(false);
-    if (!result.ok) setError(result.error ?? '사용 완료로 바꾸지 못했어요');
+    if (!result.ok) setError(result.error ?? '적립 완료로 바꾸지 못했어요');
   };
 
   return (
@@ -280,7 +296,7 @@ function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => 
               disabled={busy}
               className="mt-1 w-full rounded-full bg-slate-900 py-0.5 text-[8.5px] font-extrabold text-white transition active:scale-95 disabled:opacity-50"
             >
-              사용 완료
+              적립 완료
             </button>
           ) : (
             <p className="mt-1 rounded-full bg-amber-100 py-0.5 text-[8.5px] font-extrabold text-amber-700">정리 완료</p>

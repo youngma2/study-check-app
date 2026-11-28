@@ -81,6 +81,29 @@ async function sha256Hex(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
 }
 
+/** 프로필 PIN 한 개의 저장 모양 — 평문은 두지 않고 솔트+해시만 */
+export interface HashedPin {
+  salt: string;
+  hash: string;
+}
+
+/** 4자리 PIN 을 솔트+해시로 바꿉니다(가족 설정 JSON 에 이 모양으로 저장). */
+export async function hashPin(pin: string): Promise<HashedPin> {
+  const salt = randomHex(16);
+  return { salt, hash: await sha256Hex(`${salt}:${pin}`) };
+}
+
+/** 저장된 솔트+해시와 입력한 PIN 이 같은지 */
+export async function verifyHashedPin(pin: string, record: HashedPin | null | undefined): Promise<boolean> {
+  if (!record || typeof record.salt !== 'string' || typeof record.hash !== 'string') return false;
+  try {
+    const hash = await sha256Hex(`${record.salt}:${pin}`);
+    return hash === record.hash;
+  } catch {
+    return false;
+  }
+}
+
 export function hasLocalPin(): boolean {
   return readLocalPin() !== null;
 }

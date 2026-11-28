@@ -355,7 +355,7 @@ function ChildReportCard({
                 {Number(line.date.slice(5, 7))}/{Number(line.date.slice(8, 10))} 뽑기 · +{line.minutes}분
               </span>
               <span className={cx('shrink-0 font-extrabold', line.used ? 'text-emerald-500' : 'text-amber-500')}>
-                {line.used ? '사용 완료' : '남음'}
+                {line.used ? '적립 완료' : '남음'}
               </span>
             </li>
           ))}

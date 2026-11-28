@@ -85,7 +85,7 @@ export function WeekStrip({
           const ratio = info.total === 0 ? 0 : info.verified / info.total;
           const complete = info.total > 0 && info.verified === info.total;
           const started = ratio > 0;
-          // 🔥 버스트 타임(경험치 2배)이 적용되는 날 — 수동 시간대 또는 월말 자동
+          // 🔥 버스트 타임(경험치 배수)이 적용되는 날 — 수동 시간대 또는 월말 자동
           const burst = burstOnDate(iso, study.appSettings);
 
           return (
@@ -117,7 +117,7 @@ export function WeekStrip({
               {burst ? (
                 <span
                   data-testid={`burst-badge-${iso}`}
-                  aria-label="버스트 타임 · 경험치 2배"
+                  aria-label={`버스트 타임 · 경험치 ${study.burstFactorText}`}
                   className={cx(
                     'absolute left-1 top-0.5 rounded-full px-0.5 text-[8px] leading-tight',
                     selected ? 'bg-white/25' : 'bg-orange-100',

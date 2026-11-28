@@ -201,12 +201,12 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
     const result = await study.useReward(event.id);
     setMarkingUsed(false);
     if (!result.ok) {
-      onNotify?.(result.error ?? '사용 완료로 바꾸지 못했어요');
+      onNotify?.(result.error ?? '적립 완료로 바꾸지 못했어요');
       return;
     }
     setUsed(true);
     if (soundOn) playBoxPeek();
-    onNotify?.('사용 완료로 기록했어요');
+    onNotify?.('적립 완료로 기록했어요');
   };
 
   const othersText =
@@ -400,7 +400,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
               </p>
               {used ? (
                 <p className="inline-block rounded-full bg-emerald-50 px-2 py-0.5 text-[9.5px] font-extrabold text-emerald-600 ring-1 ring-emerald-200/70">
-                  사용 완료
+                  적립 완료
                 </p>
               ) : null}
             </div>
@@ -422,7 +422,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
               disabled={markingUsed}
               className="flex-1 rounded-2xl bg-slate-900 py-2.5 text-[11.5px] font-extrabold text-white transition active:scale-[0.98] disabled:opacity-50"
             >
-              사용 완료
+              적립 완료
             </button>
           ) : null}
           <button

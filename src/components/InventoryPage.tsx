@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { usedBonusMinutes } from '../lib/app-settings';
-import { useOverlayBack } from '../lib/back-guard';
+import { usedBonusMinutes } from '../lib/app-settings';import { useOverlayBack } from '../lib/back-guard';
 import { cx } from '../lib/cx';
 import { formatNoteTime } from '../lib/notes';
 import { unusedBonusMinutes } from '../lib/report';
@@ -12,8 +11,10 @@ import { ArrowLeftIcon, CheckIcon, TrashIcon } from './icons';
  * 🎒 인벤토리(보관함)
  *
  * 아이별로 모은 것들을 한곳에 모아 보여 줍니다.
- * · 모은/적립한 포인트(P) · 뽑은 포인트(P) · 뽑은 시간(분) · 상점에서 산 상품
- * · 다 쓴 상품·보상은 [사용 완료] 로 표시하고, 부모는 [정리] 로 목록에서 지울 수 있어요.
+ * · 모은/적립한 포인트(P) · 뽑은 포인트(P) · 적립된 시간(총 적립 분 · 사용 분 · 남은 분) · 상점에서 산 상품
+ * · 3차 4번: 상단에서 P 옆에 **남은 시간(분)** 을 크게 보여 주고, 시간 적립·사용 내역도 따로 보여 줍니다.
+ * · 3차 5번: 선물 상자에서 뽑은 내역은 기본 3개, [자세히]로 나머지 펼치기.
+ * · 다 쓴 상품·시간 보상은 부모 화면에서 [적립 완료] 로 표시하고, 부모는 [정리] 로 목록에서 지울 수 있어요.
  *
  * 상품·포인트는 상점 장부(lib/shop.ts)의 '상점 줄', 시간·선물 상자는 티어 승급 기록(lib/rewards.ts)을
  * 그대로 읽습니다 — 새 표를 만들지 않습니다.
@@ -32,6 +33,10 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
     study.isParent ? study.children[0]?.id ?? '' : study.currentMember.id,
   );
   const [busy, setBusy] = useState(false);
+  /** 5번 — 선물 상자 뽑기 내역: 기본 3개, [자세히]로 나머지 */
+  const [boxesExpanded, setBoxesExpanded] = useState(false);
+  /** 4번 — 시간 적립·사용 내역 펼치기 */
+  const [timeExpanded, setTimeExpanded] = useState(false);
 
   const child = study.children.find((member) => member.id === childId) ?? study.children[0];
   const viewer = study.isParent ? child : study.currentMember;
@@ -64,6 +69,39 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
     unusedBonusMinutes(study.tierEvents, memberId, pointPrizes) - usedMinutes,
   );
 
+  /** 4번 — 시간을 쓴 기록(타이머·바로 차감) */
+  const timeUsage = useMemo(
+    () =>
+      study.appSettings.timeUsage
+        .filter((usage) => usage.member_id === memberId)
+        .slice()
+        .reverse(),
+    [study.appSettings.timeUsage, memberId],
+  );
+
+  /** 4번 — 적립(상자) + 사용(타이머·차감) 시간 내역을 한 줄씩, 최신 순서로 */
+  const timeLines = useMemo(() => {
+    const lines = [
+      ...boxes.map((event) => ({
+        id: `box_${event.id}`,
+        at: event.opened_at ?? event.created_at,
+        minutes: event.box_minutes ?? 0,
+        kind: 'in' as const,
+        label: '🎁 선물 상자 적립',
+        detail: event.season,
+      })),
+      ...timeUsage.map((usage) => ({
+        id: `use_${usage.id}`,
+        at: usage.at,
+        minutes: usage.minutes,
+        kind: 'out' as const,
+        label: usage.mode === 'timer' ? '⏱ 타이머로 사용' : '⏳ 바로 차감',
+        detail: usage.reason ?? '',
+      })),
+    ];
+    return lines.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  }, [boxes, timeUsage]);
+
   /** 상점에서 산 상품 — 구매 줄(제목이 🛒 로 시작)만 */
   const purchases = entries.filter((entry) => entry.delta < 0 && entry.task.title.startsWith('🛒'));
 
@@ -73,10 +111,10 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
     const result = await study.setStatus(entryId, 'verified');
     setBusy(false);
     if (!result.ok) {
-      onNotify(result.error ?? '사용 완료로 바꾸지 못했어요');
+      onNotify(result.error ?? '적립 완료로 바꾸지 못했어요');
       return;
     }
-    onNotify('사용 완료로 표시했어요');
+    onNotify('적립 완료로 표시했어요');
   };
 
   const cleanupPurchase = async (entryId: string, label: string) => {
@@ -90,7 +128,7 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
     setBusy(true);
     const result = await study.useReward(eventId);
     setBusy(false);
-    onNotify(result.ok ? '사용 완료로 기록했어요' : result.error ?? '바꾸지 못했어요');
+    onNotify(result.ok ? '적립 완료로 기록했어요' : result.error ?? '바꾸지 못했어요');
   };
 
   return (
@@ -147,11 +185,19 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
           className="rounded-[24px] bg-gradient-to-r from-indigo-600 to-violet-600 p-3.5 text-white shadow-lg shadow-indigo-500/25"
         >
           <p className="text-[10px] font-extrabold text-white/75">{viewer?.name ?? '아이'} 보관함</p>
-          <p data-testid="inv-balance" className="mt-0.5 text-[26px] font-extrabold leading-none tabular-nums">
-            {balance}P
-          </p>
-          <p className="mt-1 text-[9.5px] font-bold text-white/70">지금 쓸 수 있는 포인트</p>
-          <div className="mt-2 grid grid-cols-2 gap-1.5">
+          <div className="mt-0.5 flex items-end gap-2.5">
+            <p data-testid="inv-balance" className="text-[26px] font-extrabold leading-none tabular-nums">
+              {balance}P
+            </p>
+            <p
+              data-testid="inv-time-big"
+              className="mb-0.5 text-[17px] font-extrabold leading-none tabular-nums text-white/90"
+            >
+              ⏱ {remainingMinutes}분
+            </p>
+          </div>
+          <p className="mt-1 text-[9.5px] font-bold text-white/70">지금 쓸 수 있는 포인트(P) · 남은 시간(분)</p>
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
             <div className="rounded-xl bg-white/15 px-2 py-1.5">
               <p className="text-[8.5px] font-bold text-white/70">모은/적립 P</p>
               <p data-testid="inv-earned" className="text-[12.5px] font-extrabold tabular-nums">
@@ -171,19 +217,19 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
               </p>
             </div>
             <div className="rounded-xl bg-white/15 px-2 py-1.5">
-              <p className="text-[8.5px] font-bold text-white/70">뽑은 시간</p>
+              <p className="text-[8.5px] font-bold text-white/70">총 적립 분</p>
               <p data-testid="inv-prize-minutes" className="text-[12.5px] font-extrabold tabular-nums">
                 {receivedMinutes}분
               </p>
             </div>
             <div className="rounded-xl bg-white/15 px-2 py-1.5">
-              <p className="text-[8.5px] font-bold text-white/70">쓴 시간</p>
+              <p className="text-[8.5px] font-bold text-white/70">사용 분</p>
               <p data-testid="inv-used-minutes" className="text-[12.5px] font-extrabold tabular-nums">
                 {usedMinutes}분
               </p>
             </div>
-            <div className="rounded-xl bg-white/15 px-2 py-1.5">
-              <p className="text-[8.5px] font-bold text-white/70">남은 시간</p>
+            <div className="rounded-xl bg-white/15 px-2 py-1.5 ring-1 ring-white/40">
+              <p className="text-[8.5px] font-bold text-white/70">남은 분</p>
               <p data-testid="inv-remaining-minutes" className="text-[12.5px] font-extrabold tabular-nums">
                 {remainingMinutes}분
               </p>
@@ -268,7 +314,9 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
         >
           <div className="flex items-center justify-between gap-2">
             <p className="text-[12px] font-extrabold text-slate-900">🎁 선물 상자에서 뽑은 것</p>
-            <span className="text-[9px] font-bold text-slate-400">{boxes.length}개</span>
+            <span className="text-[9px] font-bold text-slate-400">
+              {boxesExpanded ? boxes.length : Math.min(3, boxes.length)}/{boxes.length}개
+            </span>
           </div>
           {boxes.length === 0 ? (
             <p className="mt-1.5 rounded-2xl border border-dashed border-slate-200 px-3 py-3 text-center text-[10px] font-semibold text-slate-400">
@@ -276,7 +324,7 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
             </p>
           ) : (
             <ul className="mt-1.5 space-y-1">
-              {boxes.map((event) => {
+              {(boxesExpanded ? boxes : boxes.slice(0, 3)).map((event) => {
                 const frozen = boxPointPrize(study.db.tasks, event.id);
                 const isPoints = frozen !== null;
                 const value = isPoints ? frozen : event.box_minutes ?? 0;
@@ -315,7 +363,7 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
                         onClick={() => void markBoxUsed(event.id)}
                         className="shrink-0 rounded-full bg-slate-900 px-2 py-1 text-[8.5px] font-extrabold text-white transition active:scale-95 disabled:opacity-50"
                       >
-                        사용 완료
+                        적립 완료
                       </button>
                     ) : (
                       <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[8.5px] font-extrabold text-amber-700 ring-1 ring-amber-200/70">
@@ -327,6 +375,73 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
               })}
             </ul>
           )}
+          {boxes.length > 3 ? (
+            <button
+              type="button"
+              data-testid="inv-boxes-toggle"
+              onClick={() => setBoxesExpanded((prev) => !prev)}
+              aria-expanded={boxesExpanded}
+              className="mt-1.5 w-full rounded-xl bg-slate-100 py-1.5 text-[9.5px] font-extrabold text-slate-500 transition active:scale-[0.99]"
+            >
+              {boxesExpanded ? '접기' : `자세히 (나머지 ${boxes.length - 3}개)`}
+            </button>
+          ) : null}
+        </section>
+
+        {/* 4번 — 시간 적립·사용 내역 (총 적립 분 · 사용 분 · 남은 분) + 기본 3개 · [자세히] */}
+        <section
+          data-testid="inv-time-log"
+          className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[12px] font-extrabold text-slate-900">⏱ 시간 적립·사용 내역</p>
+            <span className="text-[9px] font-bold text-slate-400">
+              적립 {receivedMinutes}분 · 사용 {usedMinutes}분 · 남음 {remainingMinutes}분
+            </span>
+          </div>
+          {timeLines.length === 0 ? (
+            <p className="mt-1.5 rounded-2xl border border-dashed border-slate-200 px-3 py-3 text-center text-[10px] font-semibold text-slate-400">
+              아직 시간을 뽑거나 쓴 내역이 없어요.
+            </p>
+          ) : (
+            <ul className="mt-1.5 space-y-0.5">
+              {(timeExpanded ? timeLines : timeLines.slice(0, 3)).map((line) => (
+                <li
+                  key={line.id}
+                  data-testid={`inv-time-${line.id}`}
+                  className="flex items-center gap-2 text-[9.5px] font-bold text-slate-500"
+                >
+                  <span className="w-10 shrink-0 tabular-nums text-slate-400">
+                    {formatNoteTime(line.at)}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {line.label}
+                    {line.detail ? <span className="ml-1 text-slate-300">· {line.detail}</span> : null}
+                  </span>
+                  <span
+                    className={cx(
+                      'shrink-0 tabular-nums',
+                      line.kind === 'in' ? 'text-emerald-600' : 'text-rose-500',
+                    )}
+                  >
+                    {line.kind === 'in' ? '+' : '-'}
+                    {line.minutes}분
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {timeLines.length > 3 ? (
+            <button
+              type="button"
+              data-testid="inv-time-toggle"
+              onClick={() => setTimeExpanded((prev) => !prev)}
+              aria-expanded={timeExpanded}
+              className="mt-1.5 w-full rounded-xl bg-slate-100 py-1.5 text-[9.5px] font-extrabold text-slate-500 transition active:scale-[0.99]"
+            >
+              {timeExpanded ? '접기' : `자세히 (나머지 ${timeLines.length - 3}개)`}
+            </button>
+          ) : null}
         </section>
 
         <section className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5">
@@ -350,14 +465,15 @@ export function InventoryPage({ onClose, onNotify }: InventoryPageProps) {
         </section>
 
         <p className="px-1 pt-1 text-[9px] font-semibold leading-relaxed text-slate-400">
-          · 사용 완료·정리는 부모님만 할 수 있어요. 아이는 보관함에서 모은 것만 봐요.
+          · 적립 완료·정리는 부모님만 할 수 있어요. 아이는 보관함에서 모은 것만 봐요.
           <br />· 상품을 정리하면 그 구매 기록이 지워집니다(포인트는 환불되지 않아요).
+          <br />· 남은 분은 뽑은 시간에서 타이머·바로 차감으로 쓴 만큼을 뺐습니다.
         </p>
       </div>
 
       <div className="pointer-events-none fixed inset-x-0 bottom-6 z-10 flex justify-center px-6">
         <span className="inline-flex items-center gap-1 rounded-full bg-slate-900/90 px-3 py-1.5 text-[9.5px] font-bold text-white">
-          <CheckIcon className="h-3 w-3" /> 다 쓴 것은 [사용 완료] → [정리]
+          <CheckIcon className="h-3 w-3" /> 다 쓴 것은 [적립 완료] → [정리]
         </span>
       </div>
     </div>

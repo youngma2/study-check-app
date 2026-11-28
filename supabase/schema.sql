@@ -1726,3 +1726,74 @@ end;
 $$;
 
 notify pgrst, 'reload schema';
+
+/* ==================================================================
+   🆕 새 프로필(구성원) 만들기 — 3차 3·12번
+   ------------------------------------------------------------------
+   · 앱의 '+ 새 프로필 만들기' 는 먼저 가족 설정(family_app_settings)에 저장해
+     추가 SQL 없이도 폰끼리 함께 씁니다.
+   · 이 함수가 (다시 실행으로) 들어 있으면 새 프로필의 **공부 항목까지** 가족 DB에
+     저장됩니다(공부 표가 member_id 로 구성원을 가리키기 때문). 함수가 없어도
+     앱은 설정 저장만으로 그대로 동작합니다.
+   ================================================================== */
+create or replace function public.study_add_member(
+  p_actor_id  text,
+  p_member_id text,
+  p_name      text,
+  p_role      text default 'child',
+  p_emoji     text default '🙂',
+  p_pin       text default null
+)
+returns public.family_members
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_actor  public.family_members;
+  v_member public.family_members;
+  v_name   text := btrim(coalesce(p_name, ''));
+  v_id     text := btrim(coalesce(p_member_id, ''));
+begin
+  select * into v_actor from public.family_members where id = p_actor_id;
+  if not found then
+    raise exception '사용자를 찾을 수 없습니다. 링크를 다시 확인해 주세요.' using errcode = '42501';
+  end if;
+  if v_actor.role <> 'parent' then
+    raise exception '프로필은 부모님만 만들 수 있습니다.' using errcode = '42501';
+  end if;
+  if not public.study_pin_is_valid(v_actor.family_id, p_pin) then
+    raise exception '부모 관리 PIN이 필요합니다. 앱에서 관리 잠금을 풀고 다시 시도해 주세요.' using errcode = '42501';
+  end if;
+  if v_name = '' then
+    raise exception '이름을 적어 주세요.' using errcode = '22023';
+  end if;
+  if v_id !~ '^mem_[a-z0-9_]{2,40}$' then
+    raise exception '프로필 id가 올바르지 않습니다.' using errcode = '22023';
+  end if;
+
+  insert into public.family_members (id, family_id, name, role, emoji, color, presets, created_at)
+  values (
+    v_id,
+    v_actor.family_id,
+    v_name,
+    case when p_role = 'parent' then 'parent' else 'child' end,
+    coalesce(nullif(btrim(p_emoji), ''), '🙂'),
+    'sky',
+    '[]'::jsonb,
+    now()
+  )
+  on conflict (id) do update
+     set name  = excluded.name,
+         role  = excluded.role,
+         emoji = excluded.emoji
+  returning * into v_member;
+
+  return v_member;
+end;
+$$;
+
+revoke all on function public.study_add_member(text, text, text, text, text, text) from public;
+grant execute on function public.study_add_member(text, text, text, text, text, text) to anon, authenticated;
+
+notify pgrst, 'reload schema';

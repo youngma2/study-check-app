@@ -230,7 +230,7 @@ export function DayOverview({
                 data-testid="day-burst"
                 className="rounded-full bg-orange-100 px-1.5 py-0.5 text-[9.5px] font-extrabold text-orange-700 ring-1 ring-orange-200/70"
               >
-                🔥 버스트 타임 · 경험치 2배
+                🔥 버스트 타임 · 경험치 {study.burstFactorText}
               </span>
             ) : null}
           </div>
