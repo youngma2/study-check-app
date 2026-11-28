@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { cx } from '../lib/cx';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
@@ -12,6 +13,8 @@ interface AppHeaderProps {
   isParent: boolean;
   pendingCount: number;
   onOpenProfile: () => void;
+  /** 4차 5번 — 아이 화면 오른쪽 위 `⋮` → 프로필 관리 (아이 전용 프로필 창) */
+  onOpenChildProfile?: () => void;
 }
 
 export function AppHeader({
@@ -20,10 +23,28 @@ export function AppHeader({
   isParent,
   pendingCount,
   onOpenProfile,
+  onOpenChildProfile,
 }: AppHeaderProps) {
   const theme = memberTheme(currentMember.color);
   const study = useStudy();
   const tier = currentMember.role === 'child' ? study.seasonStatsFor(currentMember.id)?.level : null;
+
+  /** ⋮ 메뉴 (아이 화면에만) */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (event: MouseEvent | TouchEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+    };
+  }, [menuOpen]);
 
   return (
     <header className="sticky top-0 z-30 border-b border-slate-900/5 bg-[#f5f6fa]/85 backdrop-blur-xl">
@@ -67,6 +88,44 @@ export function AppHeader({
           </span>
           <ChevronDownIcon className="h-3 w-3 text-slate-400" />
         </button>
+
+        {/* 4차 5번 — 아이 화면 상단 우측 점(`⋮`) 메뉴 */}
+        {!isParent && onOpenChildProfile ? (
+          <div ref={menuRef} className="relative shrink-0">
+            <button
+              type="button"
+              data-testid="header-more"
+              onClick={() => setMenuOpen((prev) => !prev)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              aria-label="더보기 메뉴"
+              className="grid h-8 w-8 place-items-center rounded-full bg-white text-slate-500 shadow-sm ring-1 ring-slate-900/10 transition active:scale-90"
+            >
+              <span aria-hidden className="text-[15px] font-extrabold leading-none">⋮</span>
+            </button>
+            {menuOpen ? (
+              <div
+                data-testid="header-more-menu"
+                role="menu"
+                className="animate-toast-in absolute right-0 top-9 z-40 w-[132px] overflow-hidden rounded-2xl bg-white shadow-xl ring-1 ring-slate-900/10"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="menu-profile-manage"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenChildProfile();
+                  }}
+                  className="flex w-full items-center gap-1.5 px-3 py-2.5 text-left text-[11.5px] font-extrabold text-slate-700 transition active:bg-slate-50"
+                >
+                  <span aria-hidden className="text-[13px]">🏷</span>
+                  프로필 관리
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       {currentMember.role === 'child' ? <SeasonBar memberId={currentMember.id} /> : null}
     </header>

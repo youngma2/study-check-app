@@ -66,7 +66,7 @@ export function TierFooter() {
           })}
         </ul>
         <p className="mt-1.5 text-[8.5px] font-semibold leading-relaxed text-slate-400">
-          XP 는 부모 확인 완료 기준 · 당일 100% · 하루 지남 50% · 이틀 이상 25% · 큰 티어 승급마다 🎁 선물 상자
+          XP 는 부모 확인 완료 기준 · 당일 100% · 하루 지남 50% · 이틀 이상 25% · 큰 티어 승급마다 🎁 뽑기 상자
         </p>
       </div>
 

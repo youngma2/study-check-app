@@ -122,3 +122,70 @@ export async function verifyLocalPin(pin: string): Promise<boolean> {
   const hash = await sha256Hex(`${record.salt}:${pin}`);
   return hash === record.hash;
 }
+
+/* ---------------------------------------------------------------- */
+/* 🔐 부모 PIN 비상 복구 (4차 1번)                                     */
+/* ---------------------------------------------------------------- */
+
+/** 비상 복구용 1회용 6자리 코드(백업 키) — 화면에 한 번 보여 주고 해시로만 저장합니다. */
+export function generateRecoveryCode(): string {
+  const array = new Uint32Array(1);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(array);
+  else array[0] = Math.floor(Math.random() * 1_000_000);
+  return String(array[0] % 1_000_000).padStart(6, '0');
+}
+
+const DEVICE_RECOVERY_KEY = 'study-check.parent-pin-recovery.v1';
+
+/**
+ * 가족 DB(Supabase)에 연결된 앱은 서버 PIN 을 바꾸려면 지금 쓰는 PIN 이 필요합니다.
+ * 복구 코드로 확인한 뒤에는 **이 폰에서만** 쓸 새 부모 PIN 을 따로 두어 잠금을 열 수 있게 합니다.
+ * (서버 PIN 은 그대로라 가족 DB에 쓰는 일은 Supabase에서 PIN 을 바꾼 뒤에 됩니다)
+ */
+export async function setDeviceRecoveryPin(pin: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const salt = randomHex(16);
+    const hash = await sha256Hex(`${salt}:${pin}`);
+    window.localStorage.setItem(DEVICE_RECOVERY_KEY, JSON.stringify({ salt, hash }));
+  } catch {
+    /* 저장을 못해도 이번 화면은 그대로 */
+  }
+}
+
+/** 이 폰에 복구로 정해 둔 부모 PIN 이 있는지 */
+export function hasDeviceRecoveryPin(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(DEVICE_RECOVERY_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<LocalPinRecord>;
+    return typeof parsed.salt === 'string' && typeof parsed.hash === 'string' && parsed.hash.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** 이 폰에 복구로 정해 둔 부모 PIN 과 같은지 */
+export async function verifyDeviceRecoveryPin(pin: string): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(DEVICE_RECOVERY_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<LocalPinRecord>;
+    if (typeof parsed.salt !== 'string' || typeof parsed.hash !== 'string' || !parsed.hash) return false;
+    const hash = await sha256Hex(`${parsed.salt}:${pin}`);
+    return hash === parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
+export function clearDeviceRecoveryPin(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(DEVICE_RECOVERY_KEY);
+  } catch {
+    /* 무시 */
+  }
+}

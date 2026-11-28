@@ -21,8 +21,9 @@ import { ArrowLeftIcon, CheckIcon, PencilIcon, PlusIcon, TrashIcon } from './ico
  * 🛒 포인트 상점
  *
  * · 아이 화면: 내 포인트(P) 잔액을 보고, 상품(아이콘·이름·설명·필요 P)을 골라 삽니다.
- *   사면 포인트가 바로 빠지고 부모님께 '지급 대기' 로 올라갑니다.
- * · 부모 화면: 상품을 등록·수정·삭제하고, 아이 구매 내역을 보며 [지급 완료] 를 누릅니다.
+ *   사면 포인트가 바로 빠지고 부모님께 '사용 대기' 로 올라갑니다.
+ * · 부모 화면: 상품을 등록·수정·삭제하고, 아이 구매·사용 내역을 보며 [사용 완료] 를 누릅니다(4차 4·11번).
+ *   사용 완료된 상품은 보유 목록에서 빠지고 이 내역에만 남습니다(중복 사용 방지).
  *   포인트를 직접 지급/차감할 수도 있습니다.
  *
  * 상품과 포인트 장부는 가족 모두가 함께 보는 '상점 줄'로 저장됩니다(lib/shop.ts 참고).
@@ -73,7 +74,7 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
       onNotify(result.error ?? '구매하지 못했어요');
       return;
     }
-    onNotify(`${buying.name} 구매 완료 · 부모님께 지급 요청했어요`);
+    onNotify(`${buying.name} 구매 완료 · 부모님께 사용 확인 요청했어요`);
   };
 
   const saveProduct = async () => {
@@ -113,7 +114,7 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
 
   const deliver = async (entry: PointEntry) => {
     const result = await study.setStatus(entry.id, 'verified');
-    onNotify(result.ok ? '지급 완료로 표시했어요' : result.error ?? '바꾸지 못했어요');
+    onNotify(result.ok ? '사용 완료로 표시했어요 · 보유 목록에서 빠졌어요' : result.error ?? '바꾸지 못했어요');
   };
 
   const cancelOrder = async (entry: PointEntry) => {
@@ -154,7 +155,7 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
             </button>
             <div className="min-w-0 flex-1">
               <h1 className="text-[15px] font-extrabold tracking-tight text-slate-900">🛒 포인트 상점</h1>
-              <p className="text-[9.5px] font-bold text-slate-400">모은 P 로 사고, 부모님이 지급 완료</p>
+              <p className="text-[9.5px] font-bold text-slate-400">모은 P 로 사고, 부모님이 사용 완료</p>
             </div>
           </div>
 
@@ -180,7 +181,7 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
                   tab === 'orders' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500',
                 )}
               >
-                📦 구매 내역
+                📦 구매·사용 내역
               </button>
               <button
                 type="button"
@@ -456,7 +457,7 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
         {tab === 'orders' ? (
           <section data-testid="shop-orders" className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-[12.5px] font-extrabold text-slate-900">📦 {viewer?.name ?? '아이'} 구매 내역</p>
+              <p className="text-[12.5px] font-extrabold text-slate-900">📦 {viewer?.name ?? '아이'} 구매·사용 내역</p>
               <span className="text-[9px] font-bold text-slate-400">{orders.length}건</span>
             </div>
             {orders.length === 0 ? (
@@ -493,7 +494,7 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
                         onClick={() => void deliver(entry)}
                         className="shrink-0 rounded-full bg-slate-900 px-2 py-1 text-[9px] font-extrabold text-white transition active:scale-95"
                       >
-                        지급 완료
+                        사용 완료
                       </button>
                     ) : null}
                     <button
@@ -514,8 +515,9 @@ export function ShopPage({ onClose, onNotify }: ShopPageProps) {
 
         <p className="px-1 pt-1 text-[9px] font-semibold leading-relaxed text-slate-400">
           · 포인트(P)는 경험치(XP)와 따로 셉니다. 뽑기 상자에서 분 대신 P 가 나올 수 있어요.
-          <br />· 사면 포인트가 바로 빠지고 부모님 화면에 [지급 대기] 로 올라갑니다.
-          <br />· 상품 등록·수정·삭제와 지급 완료·취소는 부모님만 할 수 있어요.
+          <br />· 사면 포인트가 바로 빠지고 부모님 화면에 [사용 대기] 로 올라갑니다.
+          <br />· 부모님이 [사용 완료] 를 누르면 보유 목록에서 빠지고 이 내역에 '사용 완료' 로 남아요.
+          <br />· 상품 등록·수정·삭제와 사용 완료·취소는 부모님만 할 수 있어요.
         </p>
       </div>
 

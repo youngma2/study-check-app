@@ -25,7 +25,9 @@ import {
   hashPin,
   isPinFormat,
   readSessionPin,
+  setDeviceRecoveryPin,
   setLocalPin,
+  verifyDeviceRecoveryPin,
   verifyHashedPin,
   verifyLocalPin,
   writeSessionPin,
@@ -47,18 +49,23 @@ import { enablePushNotifications, syncPushRegistration } from './push';
 import { StorageSetupError, createSupabaseAdapter, type NotesRemoteEvent } from './supabase';
 import { koreaTodayISO } from './date';
 import {
+  addTimeGrant,
   addTimeUsage,
   boxIsPointsPrize,
   boxRewardFor,
   burstActiveToday,
   burstFactorLabel,
   loadLocalAppSettings,
+  loadSelfProfiles,
   newProfileId,
   normalizeAppSettings,
   remainingBonusMinutes,
   saveLocalAppSettings,
+  saveSelfProfiles,
   type AppSettings,
+  type ParentRecovery,
   type ProfilePin,
+  type SelfProfile,
 } from './app-settings';
 import { unusedBonusMinutes } from './report';
 import { isShopTask, pointPrizeEventIds, prizeTaskInput } from './shop';
@@ -121,6 +128,20 @@ export interface StudyContextValue {
   parentPinSetupRequired: boolean;
   unlockParent: (pin: string) => Promise<ActionResult>;
   setParentPin: (pin: string) => Promise<ActionResult>;
+  /** 🔐 지금 쓰는 PIN 을 알고 새 PIN 으로 바꾸기 (부모 관리) */
+  changeParentPin: (currentPin: string, newPin: string) => Promise<ActionResult>;
+  /** 🔐 비상 복구 질문·답·6자리 코드 저장 (부모 관리) — 솔트+해시만 */
+  saveParentRecovery: (input: {
+    question: string;
+    answer: string;
+    code: string;
+  }) => Promise<ActionResult & { localOnly?: boolean }>;
+  /** 🔐 복구 코드 또는 질문의 답으로 부모 PIN 재설정 */
+  resetParentPinWithRecovery: (secret: string, newPin: string) => Promise<ActionResult & { deviceOnly?: boolean }>;
+  /** 🔐 저장된 비상 복구 질문·코드 (없으면 null) */
+  parentRecovery: ParentRecovery | null;
+  /** 복구로 이 폰에서만 연 상태 (서버 PIN 은 그대로) */
+  parentPinRecoveryMode: boolean;
   lockParent: () => void;
   setCurrentMember: (memberId: string) => void;
   /** 💬 우리 가족 한마디 — 최근 한마디 (새 글 먼저) */
@@ -161,8 +182,22 @@ export interface StudyContextValue {
   profilePins: Record<string, ProfilePin>;
   hasProfilePin: (memberId: string) => boolean;
   verifyProfilePin: (memberId: string, pin: string) => Promise<ActionResult>;
+  /** 🔐 아이 프로필 개인 PIN 정하기·바꾸기 (부모·PIN 만) */
   setProfilePin: (memberId: string, pin: string) => Promise<ActionResult>;
   resetProfilePin: (memberId: string) => Promise<ActionResult>;
+  /** 🏷 아이 전용 프로필 창(2·5번) — 닉네임·학년·아이콘 저장 */
+  saveChildProfile: (
+    memberId: string,
+    patch: { name?: string; grade?: string; emoji?: string },
+  ) => Promise<ActionResult & { deviceOnly?: boolean }>;
+  /** 🏷 아이가 자기 PIN 을 정하기·바꾸기 (지금 PIN 확인 후) */
+  setChildProfilePin: (
+    memberId: string,
+    pin: string,
+    currentPin?: string,
+  ) => Promise<ActionResult & { deviceOnly?: boolean }>;
+  /** 🏷 아이가 자기 PIN 을 지우기 (지금 PIN 확인 후) */
+  resetChildProfilePin: (memberId: string, currentPin?: string) => Promise<ActionResult & { deviceOnly?: boolean }>;
   /** 🆕 새 프로필 만들기 — 부모 PIN 이 풀려 있어야 저장됩니다(추가 SQL 없음). */
   createProfile: (
     input: {
@@ -185,6 +220,8 @@ export interface StudyContextValue {
     mode?: 'timer' | 'direct',
     reason?: string,
   ) => Promise<ActionResult>;
+  /** ⏱ 부모가 시간을 직접 더할 때 (8번) — 남은 시간에 바로 적립 */
+  grantBonusTime: (memberId: string, minutes: number, reason?: string) => Promise<ActionResult>;
   /** XP 계산 규칙(버스트 타임·연속 보너스) */
   xpRules: XpRules;
   /** 🔥 버스트 타임이 지금 켜져 있는지 */
@@ -279,6 +316,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   const [sessionPin, setSessionPinState] = useState<string | null>(() => readSessionPin());
   const sessionPinRef = useRef<string | null>(sessionPin);
   sessionPinRef.current = sessionPin;
+  /** 복구로 이 폰에서만 연 상태인지 (서버 PIN 은 그대로 — 옵션에 안내를 띄웁니다) */
+  const [parentPinRecoveryMode, setParentPinRecoveryMode] = useState(false);
   const [localPinReady, setLocalPinReady] = useState<boolean>(() => hasLocalPin());
 
   useEffect(() => {
@@ -590,6 +629,15 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   const [appSettings, setAppSettingsState] = useState<AppSettings>(() => loadLocalAppSettings());
   const appSettingsRef = useRef<AppSettings>(appSettings);
   appSettingsRef.current = appSettings;
+  /** 🏷 아이가 자기 화면(`⋮` → 프로필 관리)에서 바꾼 값 — 이 폰에만 저장합니다. */
+  const [selfProfiles, setSelfProfilesState] = useState<Record<string, SelfProfile>>(() => loadSelfProfiles());
+  const selfProfilesRef = useRef<Record<string, SelfProfile>>(selfProfiles);
+  selfProfilesRef.current = selfProfiles;
+  const applySelfProfiles = useCallback((next: Record<string, SelfProfile>) => {
+    selfProfilesRef.current = next;
+    setSelfProfilesState(next);
+    saveSelfProfiles(next);
+  }, []);
   /** 'cloud' 면 가족 폰이 같은 설정을 쓰고, 'local' 이면 이 폰에만 저장합니다. */
   const [settingsSync, setSettingsSync] = useState<'cloud' | 'local'>('local');
   const settingsSyncRef = useRef<'cloud' | 'local'>('local');
@@ -833,6 +881,25 @@ export function StudyProvider({ children }: { children: ReactNode }) {
 
       const next = addTimeUsage(appSettingsRef.current, memberId, wanted, mode, reason);
       return saveAppSettings({ timeUsage: next.timeUsage });
+    },
+    [saveAppSettings],
+  );
+
+  /** ⏱ 부모가 아이 시간을 직접 더합니다(8번) — 남은 시간에 바로 적립되고 내역에 +N분으로 남아요. */
+  const grantBonusTime = useCallback(
+    async (memberId: string, minutes: number, reason?: string): Promise<ActionResult> => {
+      const db = dbRef.current;
+      const actor =
+        db.members.find((member) => member.id === currentMemberIdRef.current) ?? db.members[0];
+      if (!actor || actor.role !== 'parent') {
+        return { ok: false, error: '부모 화면에서만 시간을 더할 수 있어요.' };
+      }
+      const wanted = Math.round(minutes);
+      if (!Number.isFinite(wanted) || wanted < 1) return { ok: false, error: '1분 이상 입력해 주세요.' };
+      if (wanted > 600) return { ok: false, error: '한 번에 600분(10시간)까지 더할 수 있어요.' };
+
+      const next = addTimeGrant(appSettingsRef.current, memberId, wanted, reason);
+      return saveAppSettings({ timeGrants: next.timeGrants });
     },
     [saveAppSettings],
   );
@@ -1361,8 +1428,25 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         if (!familyId) return { ok: false, error: '가족 정보를 불러오는 중이에요. 잠시 뒤 다시 해 주세요.' };
         try {
           const valid = await cloud.verifyParentPin(familyId, pin);
-          if (!valid) return { ok: false, error: 'PIN이 맞지 않아요. 다시 입력해 주세요.' };
+          if (!valid) {
+            // 복구 코드로 이 폰에 정해 둔 PIN 이면 그걸로 열어 줍니다(서버 PIN 은 그대로).
+            const recovered = await verifyDeviceRecoveryPin(pin);
+            if (recovered) {
+              writeSessionPin(pin);
+              setSessionPinState(pin);
+              setParentPinRecoveryMode(true);
+              return { ok: true };
+            }
+            return { ok: false, error: 'PIN이 맞지 않아요. 다시 입력해 주세요.' };
+          }
         } catch (error) {
+          const recovered = await verifyDeviceRecoveryPin(pin);
+          if (recovered) {
+            writeSessionPin(pin);
+            setSessionPinState(pin);
+            setParentPinRecoveryMode(true);
+            return { ok: true };
+          }
           return { ok: false, error: messageOf(error) };
         }
       } else {
@@ -1377,6 +1461,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
 
       writeSessionPin(pin);
       setSessionPinState(pin);
+      setParentPinRecoveryMode(false);
       return { ok: true };
     },
     [cloud],
@@ -1395,6 +1480,127 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     setSessionPinState(pin);
     return { ok: true };
   }, []);
+
+  /** 🔐 부모 PIN 바꾸기 — 지금 쓰는 PIN 을 알아야 바뀝니다(가족 DB면 서버 해시까지). */
+  const changeParentPin = useCallback(
+    async (currentPin: string, newPin: string): Promise<ActionResult> => {
+      if (!isPinFormat(currentPin) || !isPinFormat(newPin)) {
+        return { ok: false, error: 'PIN은 4자리 숫자로 넣어 주세요.' };
+      }
+      const familyId = dbRef.current.families[0]?.id;
+      if (modeRef.current === 'supabase' && cloud && familyId) {
+        try {
+          await cloud.setParentPin(familyId, newPin, currentPin);
+        } catch (error) {
+          return { ok: false, error: messageOf(error) };
+        }
+        writeSessionPin(newPin);
+        setSessionPinState(newPin);
+        setParentPinRecoveryMode(false);
+        return { ok: true };
+      }
+      // 이 기기 저장(데모) — 지금 PIN 을 먼저 확인합니다.
+      if (hasLocalPin()) {
+        const valid = await verifyLocalPin(currentPin);
+        if (!valid) return { ok: false, error: '지금 쓰는 PIN이 맞지 않아요.' };
+      }
+      try {
+        await setLocalPin(newPin);
+      } catch {
+        return { ok: false, error: '이 기기에서는 PIN을 저장할 수 없어요.' };
+      }
+      setLocalPinReady(true);
+      writeSessionPin(newPin);
+      setSessionPinState(newPin);
+      return { ok: true };
+    },
+    [cloud],
+  );
+
+  /** 🔐 비상 복구 질문·답·6자리 코드 저장 — 답·코드는 솔트+해시만 둡니다. */
+  const saveParentRecovery = useCallback(
+    async (input: {
+      question: string;
+      answer: string;
+      code: string;
+    }): Promise<ActionResult & { localOnly?: boolean }> => {
+      const question = input.question.trim().slice(0, 60);
+      const answer = input.answer.trim();
+      const code = input.code.trim();
+      if (!question) return { ok: false, error: '비상 복구 질문을 적어 주세요.' };
+      if (answer.length < 2) return { ok: false, error: '질문의 답을 2자 이상 적어 주세요.' };
+      if (!/^\d{6}$/.test(code)) return { ok: false, error: '복구 코드는 숫자 6자리로 정해 주세요.' };
+
+      const answerRecord = await hashPin(answer.toLowerCase());
+      const codeRecord = await hashPin(code);
+      const recovery: ParentRecovery = {
+        question,
+        salt: answerRecord.salt,
+        hash: answerRecord.hash,
+        codeSalt: codeRecord.salt,
+        codeHash: codeRecord.hash,
+        updated_at: new Date().toISOString(),
+      };
+      const result = await saveAppSettings({ parentRecovery: recovery });
+      return result.ok ? { ok: true, localOnly: result.localOnly } : { ok: false, error: result.error };
+    },
+    [saveAppSettings],
+  );
+
+  /**
+   * 🔐 비상 복구 코드(질문의 답)를 확인하고 새 부모 PIN 으로 재설정합니다.
+   * · 이 기기 저장(데모): 바로 새 PIN 으로 바뀝니다.
+   * · 가족 DB: 서버 PIN 은 지금 PIN 을 알아야만 바꿀 수 있어, 먼저 서버에 시도하고
+   *   안 되면 **이 폰에서만** 새 PIN 으로 열리게 합니다(옵션에 안내).
+   */
+  const resetParentPinWithRecovery = useCallback(
+    async (secret: string, newPin: string): Promise<ActionResult & { deviceOnly?: boolean }> => {
+      if (!isPinFormat(newPin)) return { ok: false, error: '새 PIN은 4자리 숫자로 정해 주세요.' };
+      const recovery = appSettingsRef.current.parentRecovery;
+      if (!recovery) return { ok: false, error: '등록된 비상 복구 질문·코드가 없어요. 부모님께 설정을 부탁해 주세요.' };
+      const text = secret.trim();
+      if (!text) return { ok: false, error: '복구 코드(6자리) 또는 질문의 답을 넣어 주세요.' };
+
+      const byCode = /^\d{6}$/.test(text) && (await verifyHashedPin(text, { salt: recovery.codeSalt, hash: recovery.codeHash }));
+      const byAnswer =
+        !byCode &&
+        (await verifyHashedPin(text.toLowerCase(), { salt: recovery.salt, hash: recovery.hash }));
+      if (!byCode && !byAnswer) {
+        return { ok: false, error: '복구 코드나 답이 맞지 않아요. 다시 확인해 주세요.' };
+      }
+
+      const familyId = dbRef.current.families[0]?.id;
+      if (modeRef.current === 'supabase' && cloud && familyId) {
+        try {
+          // 서버에 아직 PIN 이 없거나(NULL) 바뀌는 경우 — 지금 PIN 없이도 되는 건 서버가 판단합니다.
+          await cloud.setParentPin(familyId, newPin, null);
+          writeSessionPin(newPin);
+          setSessionPinState(newPin);
+          setParentPinRecoveryMode(false);
+          return { ok: true };
+        } catch {
+          // 서버가 "지금 쓰는 PIN" 을 요구함 — 이 폰에서만 새 PIN 으로 열리게 합니다.
+          await setDeviceRecoveryPin(newPin);
+          writeSessionPin(newPin);
+          setSessionPinState(newPin);
+          setParentPinRecoveryMode(true);
+          return { ok: true, deviceOnly: true };
+        }
+      }
+
+      try {
+        await setLocalPin(newPin);
+      } catch {
+        return { ok: false, error: '이 기기에서는 PIN을 저장할 수 없어요.' };
+      }
+      setLocalPinReady(true);
+      writeSessionPin(newPin);
+      setSessionPinState(newPin);
+      setParentPinRecoveryMode(false);
+      return { ok: true };
+    },
+    [cloud],
+  );
 
   /** 관리 잠금 — 이번 탭의 PIN 을 지웁니다. */
   const lockParent = useCallback(() => {
@@ -1526,12 +1732,15 @@ export function StudyProvider({ children }: { children: ReactNode }) {
 
   const displayMembers = useMemo(
     () =>
-      allMembers.map((member) =>
-        appSettings.profileEmoji[member.id]
-          ? { ...member, emoji: appSettings.profileEmoji[member.id] }
-          : member,
-      ),
-    [allMembers, appSettings.profileEmoji],
+      allMembers.map((member) => {
+        const self = selfProfiles[member.id];
+        const name = self?.name ?? appSettings.profileNames[member.id] ?? member.name;
+        const grade = self?.grade ?? appSettings.profileGrades[member.id] ?? member.grade;
+        const emoji = self?.emoji ?? appSettings.profileEmoji[member.id] ?? member.emoji;
+        if (name === member.name && grade === member.grade && emoji === member.emoji) return member;
+        return { ...member, name, grade, emoji };
+      }),
+    [allMembers, appSettings.profileEmoji, appSettings.profileNames, appSettings.profileGrades, selfProfiles],
   );
 
   /** 🖼 프로필 아이콘 바꾸기 — 부모(PIN) 만. */
@@ -1550,17 +1759,19 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     [saveAppSettings],
   );
 
-  /** 🔐 프로필 PIN — 그 사람 PIN 이 정해져 있는지 */
+  /** 🔐 프로필 PIN — 그 사람 PIN 이 정해져 있는지 (가족 설정 또는 이 폰에서 정한 것) */
   const hasProfilePin = useCallback(
-    (memberId: string) => Boolean(appSettingsRef.current.profilePins[memberId]),
+    (memberId: string) =>
+      Boolean(selfProfilesRef.current[memberId]?.pin) || Boolean(appSettingsRef.current.profilePins[memberId]),
     [],
   );
 
-  /** 🔐 프로필 PIN 확인 — 맞으면 ok, 틀리면 이유를 돌려줍니다. */
+  /** 🔐 프로필 PIN 확인 — 맞으면 ok, 틀리면 이유를 돌려줍니다. (이 폰 PIN 을 먼저 봅니다) */
   const verifyProfilePin = useCallback(
     async (memberId: string, pin: string): Promise<ActionResult> => {
       if (!isPinFormat(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
-      const record = appSettingsRef.current.profilePins[memberId];
+      const localPin = selfProfilesRef.current[memberId]?.pin;
+      const record = localPin ?? appSettingsRef.current.profilePins[memberId];
       if (!record) return { ok: true };
       const valid = await verifyHashedPin(pin, record);
       return valid ? { ok: true } : { ok: false, error: 'PIN이 맞지 않아요. 다시 입력해 주세요.' };
@@ -1568,7 +1779,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  /** 🔐 프로필 PIN 정하기·바꾸기 — 부모(PIN) 만. */
+  /** 🔐 프로필 PIN 정하기·바꾸기 — 부모(PIN) 만. (이 폰에 남아 있던 아이 PIN 은 지웁니다) */
   const setProfilePin = useCallback(
     async (memberId: string, pin: string): Promise<ActionResult> => {
       if (!isPinFormat(pin)) return { ok: false, error: '4자리 숫자를 입력해 주세요.' };
@@ -1576,9 +1787,17 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       const result = await saveAppSettings({
         profilePins: { ...appSettingsRef.current.profilePins, [memberId]: record },
       });
+      if (result.ok && selfProfilesRef.current[memberId]?.pin) {
+        const overlays = { ...selfProfilesRef.current };
+        const entry = { ...overlays[memberId] };
+        delete entry.pin;
+        if (Object.keys(entry).length > 0) overlays[memberId] = entry;
+        else delete overlays[memberId];
+        applySelfProfiles(overlays);
+      }
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
-    [saveAppSettings],
+    [applySelfProfiles, saveAppSettings],
   );
 
   /** 🔐 프로필 PIN 지우기(초기화) — 부모(PIN) 만. 다음부터는 PIN 없이 들어갑니다. */
@@ -1586,10 +1805,158 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     async (memberId: string): Promise<ActionResult> => {
       const next = { ...appSettingsRef.current.profilePins };
       delete next[memberId];
+      const overlays = { ...selfProfilesRef.current };
+      if (overlays[memberId]?.pin) {
+        const entry = { ...overlays[memberId] };
+        delete entry.pin;
+        if (Object.keys(entry).length > 0) overlays[memberId] = entry;
+        else delete overlays[memberId];
+        applySelfProfiles(overlays);
+      }
       const result = await saveAppSettings({ profilePins: next });
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     },
-    [saveAppSettings],
+    [applySelfProfiles, saveAppSettings],
+  );
+
+  /* ---------------------------------------------------------------- */
+  /* 🏷 아이 전용 프로필 창 (4차 2·5번) — 닉네임·학년·아이콘·아이 PIN            */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * 아이 프로필 값 저장 — 부모면 가족 설정(폰끼리 함께)에, 아이면 이 폰에만 저장합니다.
+   * (가족 설정은 부모 + PIN 이 있어야 저장되는 구조라, 아이 혼자 바꾼 값은 이 폰에 둡니다)
+   */
+  const saveChildProfile = useCallback(
+    async (
+      memberId: string,
+      patch: { name?: string; grade?: string; emoji?: string },
+    ): Promise<ActionResult & { deviceOnly?: boolean }> => {
+      const known =
+        dbRef.current.members.some((member) => member.id === memberId) ||
+        appSettingsRef.current.extraMembers.some((member) => member.id === memberId);
+      if (!known) return { ok: false, error: '구성원을 찾지 못했어요.' };
+
+      const name = patch.name?.trim().slice(0, 20);
+      const grade = patch.grade?.trim().slice(0, 10);
+      const emoji = patch.emoji?.trim().slice(0, 8);
+      if (!name && !grade && !emoji) return { ok: false, error: '바꿀 값을 하나 이상 적어 주세요.' };
+
+      const actor =
+        dbRef.current.members.find((member) => member.id === currentMemberIdRef.current) ??
+        dbRef.current.members[0];
+      const viewerIsParent = actor?.role === 'parent';
+
+      // 아이가 바꾸는 값은 이 폰에만 (가족 설정은 부모만 저장할 수 있음)
+      if (!viewerIsParent) {
+        const next = { ...selfProfilesRef.current };
+        const entry: SelfProfile = { ...(next[memberId] ?? {}) };
+        if (name) entry.name = name;
+        if (grade) entry.grade = grade;
+        if (emoji) entry.emoji = emoji;
+        next[memberId] = entry;
+        applySelfProfiles(next);
+        return { ok: true, deviceOnly: true };
+      }
+
+      const patchSettings: Partial<AppSettings> = {};
+      if (name) patchSettings.profileNames = { ...appSettingsRef.current.profileNames, [memberId]: name };
+      if (grade) patchSettings.profileGrades = { ...appSettingsRef.current.profileGrades, [memberId]: grade };
+      if (emoji) patchSettings.profileEmoji = { ...appSettingsRef.current.profileEmoji, [memberId]: emoji };
+      const result = await saveAppSettings(patchSettings);
+      if (!result.ok) return { ok: false, error: result.error };
+
+      // 부모가 정한 값이면 이 폰의 예전 아이 설정은 지워 둡니다(같은 값이 두 번 덮이지 않게).
+      // 아이가 이 폰에서 정해 둔 PIN 은 지우지 않고 그대로 둡니다.
+      if (selfProfilesRef.current[memberId]) {
+        const next = { ...selfProfilesRef.current };
+        const entry = { ...next[memberId] };
+        delete entry.name;
+        delete entry.grade;
+        delete entry.emoji;
+        if (Object.keys(entry).length > 0) next[memberId] = entry;
+        else delete next[memberId];
+        applySelfProfiles(next);
+      }
+      return { ok: true };
+    },
+    [applySelfProfiles, saveAppSettings],
+  );
+
+  /** 🏷 아이가 자기 PIN 을 정하기·바꾸기 — 지금 PIN 이 있으면 먼저 확인합니다. */
+  const setChildProfilePin = useCallback(
+    async (
+      memberId: string,
+      pin: string,
+      currentPin?: string,
+    ): Promise<ActionResult & { deviceOnly?: boolean }> => {
+      if (!isPinFormat(pin)) return { ok: false, error: 'PIN은 4자리 숫자로 정해 주세요.' };
+      const known =
+        dbRef.current.members.some((member) => member.id === memberId) ||
+        appSettingsRef.current.extraMembers.some((member) => member.id === memberId);
+      if (!known) return { ok: false, error: '구성원을 찾지 못했어요.' };
+
+      const existing = selfProfilesRef.current[memberId]?.pin ?? appSettingsRef.current.profilePins[memberId];
+      if (existing) {
+        if (!currentPin || !isPinFormat(currentPin)) {
+          return { ok: false, error: '지금 쓰는 아이 PIN 4자리를 먼저 넣어 주세요.' };
+        }
+        const valid = await verifyHashedPin(currentPin, existing);
+        if (!valid) return { ok: false, error: '지금 쓰는 PIN이 맞지 않아요.' };
+      }
+
+      const record = await hashPin(pin);
+      const actor =
+        dbRef.current.members.find((member) => member.id === currentMemberIdRef.current) ??
+        dbRef.current.members[0];
+
+      // 부모 화면에서 바꾸면 가족 설정에 (아이 폰에서도 같은 PIN)
+      if (actor?.role === 'parent') {
+        const result = await saveAppSettings({
+          profilePins: { ...appSettingsRef.current.profilePins, [memberId]: record },
+        });
+        return result.ok ? { ok: true } : { ok: false, error: result.error };
+      }
+
+      const next = { ...selfProfilesRef.current };
+      next[memberId] = { ...(next[memberId] ?? {}), pin: record };
+      applySelfProfiles(next);
+      return { ok: true, deviceOnly: true };
+    },
+    [applySelfProfiles, saveAppSettings],
+  );
+
+  /** 🏷 아이가 자기 PIN 을 지우기 — 지금 PIN 확인 후 */
+  const resetChildProfilePin = useCallback(
+    async (memberId: string, currentPin?: string): Promise<ActionResult & { deviceOnly?: boolean }> => {
+      const existing = selfProfilesRef.current[memberId]?.pin ?? appSettingsRef.current.profilePins[memberId];
+      if (existing) {
+        if (!currentPin || !isPinFormat(currentPin)) {
+          return { ok: false, error: '지금 쓰는 아이 PIN 4자리를 먼저 넣어 주세요.' };
+        }
+        const valid = await verifyHashedPin(currentPin, existing);
+        if (!valid) return { ok: false, error: '지금 쓰는 PIN이 맞지 않아요.' };
+      }
+      const actor =
+        dbRef.current.members.find((member) => member.id === currentMemberIdRef.current) ??
+        dbRef.current.members[0];
+      if (actor?.role === 'parent') {
+        const next = { ...appSettingsRef.current.profilePins };
+        delete next[memberId];
+        const result = await saveAppSettings({ profilePins: next });
+        return result.ok ? { ok: true } : { ok: false, error: result.error };
+      }
+      const overlays = { ...selfProfilesRef.current };
+      if (overlays[memberId]?.pin) {
+        const entry = { ...overlays[memberId] };
+        delete entry.pin;
+        if (Object.keys(entry).length > 0) overlays[memberId] = entry;
+        else delete overlays[memberId];
+        applySelfProfiles(overlays);
+      }
+      return { ok: true, deviceOnly: true };
+    },
+    [applySelfProfiles, saveAppSettings],
   );
 
   /** 🆕 새 프로필 만들기 — 이름·아이콘·역할·PIN. 추가 SQL 없이 가족 설정 JSON 에 저장합니다. */
@@ -1754,11 +2121,20 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       verifyProfilePin,
       setProfilePin,
       resetProfilePin,
+      saveChildProfile,
+      setChildProfilePin,
+      resetChildProfilePin,
       createProfile,
       monthlySettlementsFor,
       settingsSync,
       saveAppSettings,
       consumeBonusTime,
+      grantBonusTime,
+      parentRecovery: appSettings.parentRecovery,
+      saveParentRecovery,
+      resetParentPinWithRecovery,
+      changeParentPin,
+      parentPinRecoveryMode,
       xpRules,
       burstActive: burstActiveToday(appSettings, koreaTodayISO()),
       parentUnlocked: sessionPin !== null,
@@ -1804,6 +2180,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     settingsSync,
     saveAppSettings,
     consumeBonusTime,
+    grantBonusTime,
     xpRules,
     sessionPin,
     localPinReady,
@@ -1812,11 +2189,18 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     verifyProfilePin,
     setProfilePin,
     resetProfilePin,
+    saveChildProfile,
+    setChildProfilePin,
+    resetChildProfilePin,
     createProfile,
     monthlySettlementsFor,
     displayMembers,
     unlockParent,
     setParentPin,
+    saveParentRecovery,
+    resetParentPinWithRecovery,
+    changeParentPin,
+    parentPinRecoveryMode,
     lockParent,
     setCurrentMember,
     tasksFor,

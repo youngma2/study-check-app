@@ -15,17 +15,23 @@ import {
   reachedStreakBonus,
   removeCustomPreset,
   renameCustomPreset,
+  saveLocalAppSettings,
   withRoutineItems,
   type AppSettings,
   type BoxReward,
   type RoutineItem,
   type RoutineKey,
 } from '../lib/app-settings';
+import { backupFileName, buildBackup, downloadJson, parseBackup, type BackupFile } from '../lib/backup';
 import { useOverlayBack } from '../lib/back-guard';
 import { cx } from '../lib/cx';
-import { fromISODate, koreaTodayISO, WEEKDAY_LABELS } from '../lib/date';
+import { fromISODate, koreaISODateOf, koreaTodayISO, WEEKDAY_LABELS } from '../lib/date';
 import { defaultItemsForDay } from '../lib/defaults';
 import { computePastSeason, formatXp, isXpHiddenTask, recentSeasons, TIERS, tierThreshold } from '../lib/season';
+import { saveLocalNotes } from '../lib/notes';
+import { generateRecoveryCode } from '../lib/pin';
+import { saveLocalTierEvents } from '../lib/rewards';
+import { saveLocalDB } from '../lib/store';
 import { useStudy } from '../lib/study-context';
 import { SUBJECTS, subjectMeta } from '../lib/theme';
 import type { Task } from '../lib/types';
@@ -38,7 +44,7 @@ import { ArrowLeftIcon, CheckIcon, PlusIcon, TrashIcon } from './icons';
  *    · 학기중만 지난 기록(DB)으로 기본이 채워지고, 방학·시험기간은 비어 있어 직접 채웁니다.
  * ⑤ 항목마다 적용 요일(월~일) 체크박스·순서(↑↓)·'부모 확인 필요'를 정합니다.
  * ⑥ 예전 [📋 기본 목록 도구] 는 없앴습니다.
- * ⑦ 🎁 선물 상자: 보상 목록(수정 잠금·삭제 후 다시 추가) + 상자 개수(1~5).
+ * ⑦ 🎁 뽑기 상자: 보상 목록(수정 잠금·삭제 후 다시 추가) + 상자 개수(1~5).
  * ⑪ 티어 난이도(%) 버튼 — 지난 기록·승급 기록에는 소급하지 않습니다.
  */
 
@@ -92,7 +98,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   const settings = study.appSettings;
   useOverlayBack(true, onClose);
 
-  const [tab, setTab] = useState<'routines' | 'events'>('routines');
+  const [tab, setTab] = useState<'routines' | 'events' | 'system'>('routines');
   /** ④ 지금 '보고 고치는' 프리셋 — 실제 적용(activePreset)은 [이 프리셋 적용] 으로 따로 합니다. */
   const [presetView, setPresetView] = useState<RoutineKey>(settings.activePreset);
   const [memberId, setMemberId] = useState<string>(study.children[0]?.id ?? '');
@@ -120,6 +126,26 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   const [boxDraft, setBoxDraft] = useState<BoxReward[]>(settings.boxRewards);
   const [boxKind, setBoxKind] = useState<'minutes' | 'points'>('minutes');
   const [boxValue, setBoxValue] = useState('10');
+  /** 4차 1번 — 비상 복구 질문·답·6자리 코드 */
+  const [recoveryQuestion, setRecoveryQuestion] = useState(
+    study.appSettings.parentRecovery?.question ?? '어릴 적 별명은?',
+  );
+  const [recoveryAnswer, setRecoveryAnswer] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState(() => generateRecoveryCode());
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoverySaved, setRecoverySaved] = useState<string | null>(null);
+  /** 4차 1번 — 부모 PIN 바꾸기 */
+  const [pinCurrent, setPinCurrent] = useState('');
+  const [pinNew, setPinNew] = useState('');
+  const [pinBusy, setPinBusy] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
+  /** 4차 7번 — 백업·복원 */
+  const backupFileRef = useRef<HTMLInputElement | null>(null);
+  const [backupNote, setBackupNote] = useState<string | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<BackupFile | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
 
   useEffect(() => {
     setBonusDraft(study.appSettings.streakBonuses);
@@ -408,7 +434,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
   };
 
   const setBoxCount = async (count: number) => {
-    if (await save({ boxCount: count })) onNotify(`선물 상자를 ${count}개 보여 줄게요`);
+    if (await save({ boxCount: count })) onNotify(`뽑기 상자를 ${count}개 보여 줄게요`);
   };
 
   const saveBoxRewards = async (next: BoxReward[], message: string) => {
@@ -438,7 +464,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
       { id: `bx_${boxKind}_${Date.now().toString(36)}`, kind: boxKind, value },
     ];
     setBoxDraft(next);
-    await saveBoxRewards(next, `선물 상자 보상에 ${value}${boxKind === 'points' ? 'P' : '분'}을 추가했어요`);
+    await saveBoxRewards(next, `뽑기 상자 보상에 ${value}${boxKind === 'points' ? 'P' : '분'}을 추가했어요`);
     setBoxValue('10');
   };
 
@@ -477,6 +503,101 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
     if (await save({ tierDifficulty: value, settlements })) {
       onNotify(`티어 난이도를 ${value === 0 ? '기본(0%)' : `${value > 0 ? '+' : ''}${value}%`}로 바꿨어요 · 지난 기록은 그대로예요`);
     }
+  };
+
+
+  /* ---------------- 🔐 부모 PIN · 비상 복구 (4차 1번) ---------------- */
+
+  const saveRecovery = async () => {
+    if (recoveryBusy) return;
+    setRecoveryBusy(true);
+    setRecoveryError(null);
+    setRecoverySaved(null);
+    const result = await study.saveParentRecovery({
+      question: recoveryQuestion,
+      answer: recoveryAnswer,
+      code: recoveryCode,
+    });
+    setRecoveryBusy(false);
+    if (!result.ok) {
+      setRecoveryError(result.error ?? '저장하지 못했어요');
+      return;
+    }
+    setRecoverySaved(
+      result.localOnly
+        ? `이 폰에만 저장했어요 · 복구 코드 6자리는 ${recoveryCode} 예요`
+        : `저장했어요 · 복구 코드 6자리는 ${recoveryCode} 예요 (따로 적어 두세요)`,
+    );
+    setRecoveryAnswer('');
+    onNotify('비상 복구 질문·코드를 저장했어요');
+  };
+
+  const changePin = async () => {
+    if (pinBusy) return;
+    setPinBusy(true);
+    setPinError(null);
+    const result = await study.changeParentPin(pinCurrent, pinNew);
+    setPinBusy(false);
+    if (!result.ok) {
+      setPinError(result.error ?? 'PIN을 바꾸지 못했어요');
+      return;
+    }
+    setPinCurrent('');
+    setPinNew('');
+    onNotify('부모 관리 PIN을 바꿨어요');
+  };
+
+  /* ---------------- 💾 데이터 백업·복원 (4차 7번) ---------------- */
+
+  const makeBackup = () => {
+    const data = buildBackup({
+      db: study.db,
+      appSettings: study.appSettings,
+      rewardSettings: study.rewardSettings,
+      notes: study.notes,
+      tierEvents: study.tierEvents,
+    });
+    downloadJson(backupFileName(), data);
+    setBackupNote(
+      `백업 파일을 내려받았어요 · 공부 ${study.db.tasks.length}개 · 한마디 ${study.notes.length}개 · 설정 포함`,
+    );
+  };
+
+  const pickBackup = async (file: File) => {
+    setRestoreError(null);
+    setBackupNote(null);
+    const text = await file.text();
+    const parsed = parseBackup(text);
+    if (!parsed) {
+      setRestoreError('이 파일은 공부 체크 백업 파일이 아니에요 (.json 확인)');
+      return;
+    }
+    setRestoreTarget(parsed);
+  };
+
+  const applyRestore = async () => {
+    if (!restoreTarget || restoreBusy) return;
+    setRestoreBusy(true);
+    setRestoreError(null);
+    if (study.storageKind === 'local') {
+      if (restoreTarget.db) saveLocalDB(restoreTarget.db);
+      if (restoreTarget.appSettings) saveLocalAppSettings(restoreTarget.appSettings);
+      if (restoreTarget.notes) saveLocalNotes(restoreTarget.notes);
+      if (restoreTarget.tierEvents) saveLocalTierEvents(restoreTarget.tierEvents);
+      setRestoreBusy(false);
+      setRestoreTarget(null);
+      onNotify('백업 파일로 되돌렸어요 · 화면을 새로 고칩니다');
+      window.setTimeout(() => window.location.reload(), 800);
+      return;
+    }
+    const result = await study.saveAppSettings(restoreTarget.appSettings ?? {});
+    setRestoreBusy(false);
+    if (!result.ok) {
+      setRestoreError(result.error ?? '복원하지 못했어요');
+      return;
+    }
+    setRestoreTarget(null);
+    onNotify('옵션(설정)을 백업 파일로 되돌렸어요 · 공부 기록은 가족 DB가 원본이라 그대로예요');
   };
 
   const today = koreaTodayISO();
@@ -524,6 +645,17 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
               )}
             >
               🔥 이벤트·보너스
+            </button>
+            <button
+              type="button"
+              data-testid="option-tab-system"
+              onClick={() => setTab('system')}
+              className={cx(
+                'flex-1 rounded-full px-2.5 py-1.5 text-[10.5px] font-extrabold transition',
+                tab === 'system' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500',
+              )}
+            >
+              🔐 설정·백업
             </button>
           </div>
         </div>
@@ -1033,7 +1165,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
               </button>
             </section>
           </>
-        ) : (
+        ) : tab === 'events' ? (
           <>
             <section className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5">
               <div className="flex items-start justify-between gap-2">
@@ -1185,7 +1317,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
               <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-slate-500">
                 기본(0%) 기준으로 브론즈 0~199 · 실버 200~449 · 골드 450~799 · 플래티넘 800~1,199 ·
                 다이아 1,200~1,599 · 마스터 1,600+ XP 예요. 버튼을 누르면 바로 바뀌고, 모아 둔 XP·지난 승급·
-                선물 상자·결산 기록에는 소급하지 않아요.
+                뽑기 상자·결산 기록에는 소급하지 않아요.
               </p>
               <div className="no-scrollbar mt-2 flex gap-1 overflow-x-auto pb-0.5">
                 {TIER_DIFFICULTY_OPTIONS.map((value) => (
@@ -1228,14 +1360,14 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
               </p>
             </section>
 
-            {/* ⑦ 🎁 선물 상자 보상 목록 (분·포인트) + 상자 개수 */}
+            {/* ⑦ 🎁 뽑기 상자 보상 목록 (분·포인트) + 상자 개수 */}
             <section
               data-testid="box-rewards"
               className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5"
             >
-              <p className="text-[12.5px] font-extrabold text-slate-900">🎁 선물 상자 보상 목록</p>
+              <p className="text-[12.5px] font-extrabold text-slate-900">🎁 뽑기 상자 보상 목록</p>
               <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-slate-500">
-                큰 티어로 올라가 선물 상자를 열 때 나오는 보상이에요. 이미 넣어 둔 보상은 그 자리에서 고치지
+                큰 티어로 올라가 뽑기 상자를 열 때 나오는 보상이에요. 이미 넣어 둔 보상은 그 자리에서 고치지
                 않고(잠금), 지우고 새로 넣어 주세요. 포인트는 🛒 상점에서 씁니다.
               </p>
 
@@ -1267,7 +1399,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                       onClick={() =>
                         void saveBoxRewards(
                           boxDraft.filter((item) => item.id !== reward.id),
-                          '선물 상자 보상을 뺐어요',
+                          '뽑기 상자 보상을 뺐어요',
                         )
                       }
                       aria-label={`${reward.value}${reward.kind === 'points' ? 'P' : '분'} 삭제`}
@@ -1310,7 +1442,7 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
                 </button>
               </div>
 
-              <p className="mt-2.5 text-[10px] font-extrabold tracking-wide text-slate-400">선물 상자 개수</p>
+              <p className="mt-2.5 text-[10px] font-extrabold tracking-wide text-slate-400">뽑기 상자 개수</p>
               <div className="mt-1 flex gap-1">
                 {[1, 2, 3, 4, 5].map((count) => (
                   <button
@@ -1428,6 +1560,215 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
               </p>
             </section>
           </>
+        ) : (
+          <>
+            {/* 4차 1번 — 부모 PIN · 비상 복구 */}
+            <section
+              data-testid="pin-recovery-section"
+              className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5"
+            >
+              <p className="text-[12.5px] font-extrabold text-slate-900">🔐 부모 PIN · 비상 복구</p>
+              <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-slate-500">
+                PIN 을 잊어버려도 열 수 있게 <b className="font-extrabold text-slate-700">비상 복구 질문</b>과
+                <b className="font-extrabold text-slate-700"> 1회용 6자리 코드</b>를 함께 저장해 두세요.
+                PIN 입력 화면의 `비밀번호 찾기` 에서 코드나 답을 넣으면 새 PIN 으로 바뀝니다.
+                (답·코드는 솔트+해시로만 저장 — 평문 없음)
+              </p>
+
+              {study.parentPinRecoveryMode ? (
+                <p
+                  data-testid="pin-recovery-mode-note"
+                  className="mt-2 rounded-xl bg-amber-50 px-2.5 py-2 text-[10px] font-bold leading-relaxed text-amber-800 ring-1 ring-amber-200/70"
+                >
+                  지금은 복구 PIN 으로 이 폰에서만 열린 상태예요. 가족 DB에 저장하려면 Supabase에서 부모 PIN 을
+                  한 번 다시 정해 주세요.
+                </p>
+              ) : null}
+
+              <label className="mt-2 block">
+                <span className="px-1 text-[9.5px] font-extrabold text-slate-400">비상 복구 질문</span>
+                <input
+                  data-testid="recovery-question"
+                  value={recoveryQuestion}
+                  maxLength={60}
+                  onChange={(event) => setRecoveryQuestion(event.target.value)}
+                  placeholder="예: 어릴 적 별명은?"
+                  className="mt-0.5 w-full rounded-xl bg-slate-50 px-3 py-2 text-[11.5px] font-bold text-slate-800 outline-none ring-1 ring-slate-200 placeholder:text-slate-300 focus:ring-indigo-300"
+                />
+              </label>
+              <label className="mt-1.5 block">
+                <span className="px-1 text-[9.5px] font-extrabold text-slate-400">질문의 답</span>
+                <input
+                  data-testid="recovery-answer"
+                  value={recoveryAnswer}
+                  maxLength={40}
+                  onChange={(event) => setRecoveryAnswer(event.target.value)}
+                  placeholder="답 (대소문자 구분 없이 확인해요)"
+                  className="mt-0.5 w-full rounded-xl bg-slate-50 px-3 py-2 text-[11.5px] font-bold text-slate-800 outline-none ring-1 ring-slate-200 placeholder:text-slate-300 focus:ring-indigo-300"
+                />
+              </label>
+              <div className="mt-1.5 flex items-end gap-1.5">
+                <label className="min-w-0 flex-1">
+                  <span className="px-1 text-[9.5px] font-extrabold text-slate-400">1회용 복구 코드 6자리</span>
+                  <input
+                    data-testid="recovery-code"
+                    value={recoveryCode}
+                    inputMode="numeric"
+                    maxLength={6}
+                    onChange={(event) => setRecoveryCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="mt-0.5 w-full rounded-xl bg-slate-50 px-3 py-2 text-[13px] font-extrabold tabular-nums tracking-[0.2em] text-slate-800 outline-none ring-1 ring-slate-200 focus:ring-indigo-300"
+                  />
+                </label>
+                <button
+                  type="button"
+                  data-testid="recovery-new-code"
+                  onClick={() => setRecoveryCode(generateRecoveryCode())}
+                  className="shrink-0 rounded-xl bg-white px-2.5 py-2 text-[10.5px] font-extrabold text-slate-600 ring-1 ring-slate-200 transition active:scale-95"
+                >
+                  새 코드
+                </button>
+              </div>
+
+              {recoveryError ? (
+                <p data-testid="recovery-error" className="mt-1.5 text-[10.5px] font-bold text-rose-500">
+                  {recoveryError}
+                </p>
+              ) : null}
+              {recoverySaved ? (
+                <p
+                  data-testid="recovery-saved"
+                  className="mt-1.5 rounded-xl bg-emerald-50 px-2.5 py-2 text-[10px] font-bold leading-relaxed text-emerald-700 ring-1 ring-emerald-100"
+                >
+                  {recoverySaved}
+                </p>
+              ) : null}
+              <p data-testid="recovery-status" className="mt-1.5 text-[9.5px] font-bold text-slate-400">
+                {study.parentRecovery
+                  ? `등록된 복구 질문 · ${study.parentRecovery.question} (${koreaISODateOf(study.parentRecovery.updated_at) ?? study.parentRecovery.updated_at.slice(0, 10)} 저장)`
+                  : '아직 비상 복구가 등록되지 않았어요'}
+              </p>
+
+              <button
+                type="button"
+                data-testid="recovery-save"
+                disabled={recoveryBusy}
+                onClick={() => void saveRecovery()}
+                className="mt-2 flex w-full items-center justify-center gap-1 rounded-xl bg-slate-900 py-2.5 text-[11.5px] font-extrabold text-white transition active:scale-[0.98] disabled:opacity-50"
+              >
+                <CheckIcon className="h-3.5 w-3.5" strokeWidth={2.6} />
+                {recoveryBusy ? '저장하는 중…' : '비상 복구 저장'}
+              </button>
+
+              <div className="mt-3 rounded-xl bg-slate-50 p-2 ring-1 ring-slate-100">
+                <p className="text-[10px] font-extrabold text-slate-600">부모 관리 PIN 바꾸기</p>
+                <div className="mt-1 flex gap-1.5">
+                  <input
+                    data-testid="pin-current"
+                    value={pinCurrent}
+                    inputMode="numeric"
+                    maxLength={4}
+                    onChange={(event) => setPinCurrent(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="지금 PIN"
+                    className="min-w-0 flex-1 rounded-lg bg-white px-2 py-1.5 text-[11.5px] font-extrabold tabular-nums text-slate-800 outline-none ring-1 ring-slate-200 placeholder:text-slate-300"
+                  />
+                  <input
+                    data-testid="pin-new"
+                    value={pinNew}
+                    inputMode="numeric"
+                    maxLength={4}
+                    onChange={(event) => setPinNew(event.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="새 PIN"
+                    className="min-w-0 flex-1 rounded-lg bg-white px-2 py-1.5 text-[11.5px] font-extrabold tabular-nums text-slate-800 outline-none ring-1 ring-slate-200 placeholder:text-slate-300"
+                  />
+                  <button
+                    type="button"
+                    data-testid="pin-change-save"
+                    disabled={pinBusy}
+                    onClick={() => void changePin()}
+                    className="shrink-0 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10.5px] font-extrabold text-white transition active:scale-95 disabled:opacity-50"
+                  >
+                    바꾸기
+                  </button>
+                </div>
+                {pinError ? (
+                  <p data-testid="pin-change-error" className="mt-1 text-[10px] font-bold text-rose-500">
+                    {pinError}
+                  </p>
+                ) : null}
+              </div>
+            </section>
+
+            {/* 4차 7번 — 데이터 백업·복원 */}
+            <section
+              data-testid="backup-section"
+              className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5"
+            >
+              <p className="text-[12.5px] font-extrabold text-slate-900">💾 데이터 백업·복원</p>
+              <p className="mt-0.5 text-[10px] font-semibold leading-relaxed text-slate-500">
+                공부 기록 · 구성원 · 한마디 · 옵션 · 뽑기 기록을 파일(.json) 하나로 내려받습니다.
+                {study.storageKind === 'local'
+                  ? ' 복원하면 이 폰의 기록이 그대로 되돌아가요.'
+                  : ' 가족 DB가 원본이라, 복원은 이 폰의 옵션(설정)만 되돌려요.'}
+              </p>
+
+              <div className="mt-2 flex gap-1.5">
+                <button
+                  type="button"
+                  data-testid="backup-save"
+                  onClick={makeBackup}
+                  className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-indigo-600 py-2.5 text-[11px] font-extrabold text-white transition active:scale-[0.98]"
+                >
+                  ⬇️ 폰에 백업 저장(.json)
+                </button>
+                <button
+                  type="button"
+                  data-testid="backup-restore-pick"
+                  onClick={() => backupFileRef.current?.click()}
+                  className="flex flex-1 items-center justify-center gap-1 rounded-xl bg-white py-2.5 text-[11px] font-extrabold text-slate-700 ring-1 ring-slate-200 transition active:scale-[0.98]"
+                >
+                  ⬆️ 백업 파일로 복원
+                </button>
+              </div>
+              <input
+                ref={backupFileRef}
+                data-testid="backup-file"
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) void pickBackup(file);
+                }}
+              />
+
+              {backupNote ? (
+                <p data-testid="backup-note" className="mt-1.5 text-[10px] font-bold leading-relaxed text-emerald-700">
+                  {backupNote}
+                </p>
+              ) : null}
+              {restoreError ? (
+                <p data-testid="restore-error" className="mt-1.5 text-[10px] font-bold text-rose-500">
+                  {restoreError}
+                </p>
+              ) : null}
+              <p className="mt-1.5 text-[9px] font-semibold leading-relaxed text-slate-400">
+                · 추후 `.apk` + 구글 로그인을 붙이면 구글 드라이브 백업 / 폰 로컬 저장 중에서 직접 고를 수 있게 됩니다(노션 `🔮 추후 계획`).
+              </p>
+            </section>
+
+            <section className="rounded-[22px] bg-white p-3 shadow-card ring-1 ring-slate-900/5">
+              <p className="text-[10px] font-extrabold tracking-wide text-slate-400">저장 위치</p>
+              <p
+                data-testid="settings-sync-note-system"
+                className="mt-1 text-[10px] font-semibold leading-relaxed text-slate-500"
+              >
+                {study.settingsSync === 'cloud'
+                  ? '가족 DB에 저장돼요 — 아빠·엄마 폰과 아이 폰이 같은 설정을 써요.'
+                  : '지금은 이 폰에만 저장돼요. 가족 폰이 함께 쓰려면 Supabase에서 안내된 SQL을 한 번 실행해 주세요.'}
+              </p>
+            </section>
+          </>
         )}
 
         <p className="px-1 pt-1 text-[9px] font-semibold leading-relaxed text-slate-400">
@@ -1449,6 +1790,51 @@ export function OptionsPage({ onClose, onNotify }: OptionsPageProps) {
             <CheckIcon className="h-3.5 w-3.5" strokeWidth={3} />
             {flash}
           </span>
+        </div>
+      ) : null}
+
+      {/* 4차 7번 — 복원 확인 팝업 */}
+      {restoreTarget ? (
+        <div
+          data-testid="restore-confirm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="백업 파일로 복원"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/55 px-6 backdrop-blur-sm"
+        >
+          <div className="w-full max-w-[320px] rounded-[26px] bg-white p-5 text-center shadow-2xl">
+            <p className="text-[26px] leading-none" aria-hidden>
+              💾
+            </p>
+            <h2 className="mt-2 text-[15px] font-extrabold tracking-tight text-slate-900">이 백업으로 복원할까요?</h2>
+            <p data-testid="restore-counts" className="mt-1 text-[10.5px] font-semibold leading-relaxed text-slate-500">
+              {restoreTarget.exported_at.slice(0, 10)} 백업 · 공부 {restoreTarget.db?.tasks.length ?? 0}개 · 한마디{' '}
+              {restoreTarget.notes?.length ?? 0}개
+              <br />
+              {study.storageKind === 'local'
+                ? '이 폰의 공부 기록·옵션이 백업 파일 것으로 바뀝니다.'
+                : '가족 DB의 공부 기록은 그대로 두고, 이 폰의 옵션만 되돌립니다.'}
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                data-testid="restore-cancel"
+                onClick={() => setRestoreTarget(null)}
+                className="flex-1 rounded-2xl bg-slate-100 py-2.5 text-[12px] font-extrabold text-slate-600 transition active:scale-[0.98]"
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                data-testid="restore-apply"
+                disabled={restoreBusy}
+                onClick={() => void applyRestore()}
+                className="flex-1 rounded-2xl bg-slate-900 py-2.5 text-[12px] font-extrabold text-white transition active:scale-[0.98] disabled:opacity-50"
+              >
+                {restoreBusy ? '복원하는 중…' : '복원'}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 

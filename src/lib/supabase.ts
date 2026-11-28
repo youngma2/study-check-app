@@ -478,6 +478,17 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return data === true;
   }
 
+  /** 부모 관리 PIN 바꾸기 — 지금 쓰는 PIN 을 알아야 바뀝니다(서버 bcrypt 해시). */
+  async setParentPin(familyId: string, newPin: string, currentPin?: string | null): Promise<boolean> {
+    const { data, error } = await this.client.rpc('study_set_parent_pin', {
+      p_family_id: familyId,
+      p_new_pin: newPin,
+      p_current_pin: currentPin ?? null,
+    });
+    if (error) throw toUserError(error);
+    return data === true;
+  }
+
   /* ---------------------------------------------------------------- */
   /* 🏆 시즌 티어 · 🎁 보상 뽑기 상자                                     */
   /* ---------------------------------------------------------------- */

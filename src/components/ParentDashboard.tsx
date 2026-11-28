@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { usedBonusMinutes } from '../lib/app-settings';
+import { remainingBonusMinutes } from '../lib/app-settings';
 import { pointEntriesFor, pointPrizeEventIds, pointsFor } from '../lib/shop';
 import { cx } from '../lib/cx';
 import { fromISODate, koreaTodayISO, WEEKDAY_LABELS } from '../lib/date';
@@ -56,10 +56,10 @@ function useReports(period: Period) {
           today,
           pointPrizeEventIds(study.db.tasks),
         ),
-        unusedAll: Math.max(
-          0,
-          unusedBonusMinutes(study.tierEvents, member.id, pointPrizeEventIds(study.db.tasks)) -
-            usedBonusMinutes(study.appSettings, member.id),
+        unusedAll: remainingBonusMinutes(
+          study.appSettings,
+          member.id,
+          unusedBonusMinutes(study.tierEvents, member.id, pointPrizeEventIds(study.db.tasks)),
         ),
         tier: study.seasonStatsFor(member.id)?.level ?? null,
         xp: study.seasonStatsFor(member.id)?.xp ?? 0,
@@ -117,18 +117,18 @@ export function ParentWeekSummary({ onOpen }: { onOpen: () => void }) {
                 style={{ width: `${Math.max(Math.round(report.rate * 100), report.total === 0 ? 0 : 6)}%` }}
               />
             </span>
-            <span className="w-9 shrink-0 text-right text-[10px] font-extrabold tabular-nums text-slate-700">
+            <span className="w-9 shrink-0 whitespace-nowrap text-right text-[10px] font-extrabold tabular-nums text-slate-700">
               {percent(report.rate)}
             </span>
             <span
-              className="w-[74px] shrink-0 text-right text-[9px] font-bold text-slate-400"
+              className="w-[74px] shrink-0 whitespace-nowrap text-right text-[9px] font-bold text-slate-400"
               title={`연속 100% ${report.streak}일차 · 아직 안 쓴 보너스 ${unusedAll}분`}
             >
               🔥{report.streak}일 · 🎁{unusedAll}분
             </span>
             <span
               data-testid={`summary-points-${member.id}`}
-              className="w-11 shrink-0 text-right text-[9px] font-extrabold tabular-nums text-emerald-600"
+              className="w-11 shrink-0 whitespace-nowrap text-right text-[9px] font-extrabold tabular-nums text-emerald-600"
               title={`보유 포인트 ${points}P`}
             >
               💰{points}P
@@ -237,15 +237,19 @@ function WeekTable({ report, period }: { report: MemberReport; period: Period })
         const verified = days.reduce((sum, day) => sum + day.verified, 0);
         const rate = total === 0 ? 0 : verified / total;
         return (
-          <div key={week.start} className="flex items-center gap-2">
-            <span className="w-[92px] shrink-0 text-[8.5px] font-bold text-slate-400">{week.label}</span>
-            <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+          <div key={week.start} data-testid={`dash-week-${week.start}`} className="flex items-center gap-1.5">
+            <span className="w-[84px] shrink-0 whitespace-nowrap text-[8.5px] font-bold text-slate-400">{week.label}</span>
+            {/* 4차 6번 — 게이지 폭을 줄여 완료 개수·달성률이 한 줄에 들어가게 합니다. */}
+            <span className="h-1.5 min-w-[24px] flex-[1_1_auto] overflow-hidden rounded-full bg-slate-100">
               <span
                 className={cx('block h-full rounded-full', rate >= 1 ? 'bg-emerald-400' : 'bg-indigo-400')}
                 style={{ width: `${Math.round(rate * 100)}%` }}
               />
             </span>
-            <span className="w-14 shrink-0 text-right text-[9px] font-extrabold tabular-nums text-slate-500">
+            <span
+              data-testid={`dash-week-rate-${week.start}`}
+              className="w-[70px] shrink-0 whitespace-nowrap text-right text-[9px] font-extrabold tabular-nums text-slate-500"
+            >
               {verified}/{total} · {percent(rate)}
             </span>
           </div>
@@ -303,7 +307,7 @@ function ChildReportCard({
           <p data-testid={`dash-rate-${member.id}`} className="text-[18px] font-extrabold leading-none tabular-nums text-indigo-600">
             {percent(report.rate)}
           </p>
-          <p className="mt-0.5 text-[9px] font-bold text-slate-400">
+          <p className="mt-0.5 whitespace-nowrap text-[9px] font-bold text-slate-400">
             {report.verified}/{report.total}개
           </p>
         </div>

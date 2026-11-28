@@ -95,7 +95,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
         ? { kind: 'minutes', value: event.box_minutes ?? 0 }
         : boxRewardFor(study.appSettings.boxRewards, event.id, event.box_minutes);
   const wonReward: BoxReward = { id: 'won', kind: won.kind, value: won.value };
-  /** ⑦ 옵션에서 고른 선물 상자 개수 (1~5) — 비어 있는 상자는 보상 목록에서 무작위로 채웁니다. */
+  /** ⑦ 옵션에서 고른 뽑기 상자 개수 (1~5) — 비어 있는 상자는 보상 목록에서 무작위로 채웁니다. */
   const boxCount = Math.max(1, Math.min(5, Math.round(study.appSettings.boxCount || 3)));
   const isPoints = won.kind === 'points';
   const unit = isPoints ? 'P' : '분';
@@ -266,7 +266,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
             </p>
             <h2 className="mt-0.5 text-[16px] font-extrabold tracking-tight text-slate-900">
               {stage === 'choose'
-                ? `선물 상자 ${boxCount}개 중 하나를 골라!`
+                ? `뽑기 상자 ${boxCount}개 중 하나를 골라!`
                 : stage === 'opening'
                   ? '두근두근…'
                   : '짜잔!'}
@@ -316,7 +316,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
                 onClick={() => choose(index)}
                 disabled={stage !== 'choose'}
                 aria-label={
-                  isPicked && isOpen ? `고른 상자 — ${rewardLabel(wonReward)}` : `선물 상자 ${index + 1} 고르기`
+                  isPicked && isOpen ? `고른 상자 — ${rewardLabel(wonReward)}` : `뽑기 상자 ${index + 1} 고르기`
                 }
                 className={cx(
                   'relative flex aspect-[4/5] flex-col items-center justify-center rounded-2xl text-center ring-1 transition',

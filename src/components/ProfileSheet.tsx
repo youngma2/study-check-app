@@ -28,6 +28,8 @@ interface ProfileSheetProps {
   onSetProfilePin: (memberId: string, pin: string) => Promise<{ ok: boolean; error?: string }>;
   /** 🔐 아이 프로필 개인 PIN 초기화(지우기) — 부모·PIN 만 */
   onResetProfilePin: (memberId: string) => Promise<{ ok: boolean; error?: string }>;
+  /** 🏷 아이 전용 프로필 창 열기 (4차 2번) — 닉네임·학년·아이콘·아이 PIN */
+  onManageChild?: (memberId: string) => void;
   hasProfilePin: (memberId: string) => boolean;
   onResetDemo: () => void | Promise<void>;
   canReset: boolean;
@@ -89,6 +91,7 @@ export function ProfileSheet({
   onSetEmoji,
   onSetProfilePin,
   onResetProfilePin,
+  onManageChild,
   hasProfilePin,
   onResetDemo,
   canReset,
@@ -243,7 +246,9 @@ export function ProfileSheet({
                   ? needsPin
                     ? 'PIN을 입력하면 열려요'
                     : '확인 · 수정 · 삭제 가능'
-                  : '완료 체크 · 자기 공부 추가 (삭제 불가)'}
+                  : !viewerIsParent && member.id === currentMemberId
+                    ? '눌러서 내 프로필 관리 (닉네임·학년·아이콘·PIN)'
+                    : '완료 체크 · 자기 공부 추가 (삭제 불가)'}
               </span>
             </span>
             <span
@@ -410,6 +415,16 @@ export function ProfileSheet({
                       >
                         {has ? 'PIN 있음' : 'PIN 없음'}
                       </span>
+                      {onManageChild ? (
+                        <button
+                          type="button"
+                          data-testid={`manage-profile-${member.id}`}
+                          onClick={() => onManageChild(member.id)}
+                          className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-extrabold text-indigo-600 ring-1 ring-indigo-200 transition active:scale-95"
+                        >
+                          🏷 프로필
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         data-testid={`pin-set-${member.id}`}

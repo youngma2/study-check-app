@@ -14,7 +14,8 @@ import type { Member, Task } from './types';
  *
  *   · 상품   — id `sp_…`, subject `shop`, title = 상품 이름, note = {shop:'product', emoji, desc, price}
  *   · 포인트 — id `pt_…`, subject `shop`, note = {shop:'point', kind:'earn'|'spend'|'grant', p, label}
- *              구매한 줄은 status `todo`(지급 대기) → 부모가 [지급 완료] 를 누르면 `verified`.
+ *              구매한 줄은 status `todo`(사용 대기) → 부모가 [사용 완료] 를 누르면 `verified`.
+ *              사용 완료된 구매는 보유 상품 목록에서 빠지고 '구매·사용 내역' 에만 남습니다(중복 사용 금지).
  *
  * 이런 줄은 날짜를 `2000-01-01` 로 두어 달력·통계·기본 목록 어디에도 끼어들지 않게 하고,
  * 화면 목록에서는 isShopTask 로 걸러 냅니다. (지우기는 부모만 — 아이는 장부를 고칠 수 없습니다)
@@ -49,7 +50,7 @@ export interface PointEntry {
   kind: PointKind;
   label: string;
   created_at: string;
-  /** 구매 줄이 부모의 [지급 완료] 를 받았는지 */
+  /** 구매 줄을 부모가 [사용 완료] 로 처리했는지 (status verified) */
   delivered: boolean;
   task: Task;
 }
@@ -248,10 +249,17 @@ export function boxPointPrize(tasks: Task[], eventId: string): number | null {
   return entry ? Math.abs(entry.delta) : null;
 }
 
-/** 장부 한 줄의 설명 — '지급 대기' 구매인지, 쌓인 포인트인지 */
+/** 장부 한 줄의 설명 — '사용 대기' 구매인지, 쌓인 포인트인지 (4차 4·11번) */
 export function pointEntryKindLabel(entry: PointEntry): string {
-  if (entry.kind === 'spend') return entry.delivered ? '구매 · 지급 완료' : '구매 · 지급 대기';
+  if (entry.kind === 'spend') return entry.delivered ? '구매 · 사용 완료' : '구매 · 사용 대기';
   return entry.kind === 'grant' ? '부모 지급' : '포인트 적립';
+}
+
+/** 그 아이가 아직 쓰지 않은(사용 가능한) 구매 목록 — 사용 완료된 것은 빠집니다. */
+export function availablePurchasesFor(tasks: Task[], memberId: string): PointEntry[] {
+  return pointEntriesFor(tasks, memberId).filter(
+    (entry) => entry.kind === 'spend' && entry.delta < 0 && entry.task.title.startsWith('🛒') && !entry.delivered,
+  );
 }
 
 /** 장부에 남길 사람 이름 (없으면 '가족') */

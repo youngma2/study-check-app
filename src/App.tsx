@@ -15,6 +15,7 @@ import { ShopPage } from './components/ShopPage';
 import { TimerPanel } from './components/TimerPanel';
 import { ProfileSheet } from './components/ProfileSheet';
 import { InventoryPage } from './components/InventoryPage';
+import { ChildProfileSheet } from './components/ChildProfileSheet';
 import { TierFooter } from './components/TierFooter';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
 import { LockIcon, PlusIcon, XIcon } from './components/icons';
@@ -157,6 +158,8 @@ export default function App() {
   const [shopOpen, setShopOpen] = useState(false);
   /** 🎒 인벤토리(보관함) */
   const [inventoryOpen, setInventoryOpen] = useState(false);
+  /** 🏷 아이 전용 프로필 창 (4차 2·5번) — 열려 있으면 그 아이 id */
+  const [childProfileId, setChildProfileId] = useState<string | null>(null);
   /** ⏱ 부모 전용 시간 타이머 */
   const [timerOpen, setTimerOpen] = useState(false);
   /** 📱 뒤로가기로 앱을 닫으려 할 때 띄우는 확인 */
@@ -355,6 +358,7 @@ export default function App() {
   useOverlayBack(dashboardOpen, () => setDashboardOpen(false));
   useOverlayBack(shopOpen, () => setShopOpen(false));
   useOverlayBack(inventoryOpen, () => setInventoryOpen(false));
+  useOverlayBack(childProfileId !== null, () => setChildProfileId(null));
   useOverlayBack(exitOpen, () => setExitOpen(false));
 
   const latestUnseen = unseenNotes[0] ?? null;
@@ -726,6 +730,12 @@ export default function App() {
                 if (result.ok) enterAs(pickerTarget.id);
                 return result;
               }}
+              recoveryQuestion={study.parentRecovery?.question ?? null}
+              onRecover={async (secret, newPin) => {
+                const result = await study.resetParentPinWithRecovery(secret, newPin);
+                if (result.ok) enterAs(pickerTarget.id);
+                return result;
+              }}
               onSwitchChild={(memberId) => enterAs(memberId)}
               onCancel={() => setPickerParentId(null)}
             />
@@ -779,6 +789,21 @@ export default function App() {
             }
             return result;
           }}
+          recoveryQuestion={study.parentRecovery?.question ?? null}
+          onRecover={async (secret, newPin) => {
+            const result = await study.resetParentPinWithRecovery(secret, newPin);
+            if (result.ok) {
+              setParentGateForced(false);
+              setParentGateReturnTo(null);
+              setParentGateTarget(null);
+              notify(
+                result.deviceOnly
+                  ? '복구 확인 완료 · 이 폰에서만 새 PIN으로 열려요 (가족 DB 저장은 서버 PIN을 바꾼 뒤에 돼요)'
+                  : '새 PIN으로 바꿨어요',
+              );
+            }
+            return result;
+          }}
           onSwitchChild={(memberId) => {
             setParentGateForced(false);
             setParentGateReturnTo(null);
@@ -807,6 +832,7 @@ export default function App() {
         isParent={isParent}
         pendingCount={isParent ? weekPending : 0}
         onOpenProfile={() => setProfileOpen(true)}
+        onOpenChildProfile={() => setChildProfileId(currentMember.id)}
       />
 
       <main className="mx-auto w-full max-w-md px-4 pb-36 pt-3">
@@ -962,7 +988,7 @@ export default function App() {
               className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
             >
               <span className="text-[11px] font-extrabold text-slate-800">🛒 상점</span>
-              <span className="text-[8.5px] font-bold text-slate-400">상품 · 구매 내역</span>
+              <span className="text-[8.5px] font-bold text-slate-400">상품 · 구매·사용 내역</span>
             </button>
             <button
               type="button"
@@ -1157,13 +1183,25 @@ export default function App() {
         members={study.members}
         currentMemberId={currentMember.id}
         viewerIsParent={isParent}
-        onSelect={study.setCurrentMember}
+        onSelect={(memberId) => {
+          // 아이가 자기 프로필을 누르면 프로필 선택을 닫고 **아이 전용 프로필 창**을 엽니다(2번).
+          if (!isParent && memberId === currentMember.id) {
+            setProfileOpen(false);
+            setChildProfileId(memberId);
+            return;
+          }
+          study.setCurrentMember(memberId);
+        }}
         onRequestParent={handleRequestParent}
         onLock={lockParent}
         onRename={renameMember}
         onSetEmoji={study.setMemberEmoji}
         onSetProfilePin={study.setProfilePin}
         onResetProfilePin={study.resetProfilePin}
+        onManageChild={(memberId) => {
+          setProfileOpen(false);
+          setChildProfileId(memberId);
+        }}
         hasProfilePin={study.hasProfilePin}
         onResetDemo={async () => {
           const result = await resetDemo();
@@ -1182,6 +1220,9 @@ export default function App() {
       {isParent && timerOpen ? <TimerPanel onClose={() => setTimerOpen(false)} onNotify={notify} /> : null}
       {shopOpen ? <ShopPage onClose={() => setShopOpen(false)} onNotify={notify} /> : null}
       {inventoryOpen ? <InventoryPage onClose={() => setInventoryOpen(false)} onNotify={notify} /> : null}
+      {childProfileId ? (
+        <ChildProfileSheet memberId={childProfileId} onClose={() => setChildProfileId(null)} onNotify={notify} />
+      ) : null}
 
       {/* 📱 뒤로가기 — 메인 화면에서만 「앱을 종료하시겠습니까?」 */}
       {exitOpen ? <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={confirmExit} /> : null}

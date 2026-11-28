@@ -94,6 +94,33 @@ export interface TimeUsage {
   reason?: string;
 }
 
+/**
+ * ⏱ 부모가 직접 더해 준 뽑기 시간 한 줄 (4차 8·12번)
+ * · 시간을 쓸 때(timeUsage)와 달리, 여기 있는 분은 '남은 시간'에 더해집니다.
+ */
+export interface TimeGrant {
+  id: string;
+  member_id: string;
+  minutes: number;
+  at: string;
+  /** 더해 준 사유 (착한 일 보너스 등) */
+  reason?: string;
+}
+
+/**
+ * 🔐 부모 PIN 비상 복구 (4차 1번) — 질문·답과 1회용 6자리 코드를 **솔트+해시**로만 둡니다.
+ * (평문 PIN·답·코드는 어디에도 저장하지 않습니다)
+ */
+export interface ParentRecovery {
+  /** 비상 복구 질문 (예: '어릴 적 별명은?') */
+  question: string;
+  salt: string;
+  hash: string;
+  codeSalt: string;
+  codeHash: string;
+  updated_at: string;
+}
+
 /** 🎁 뽑기 상자에서 나올 수 있는 보상 — 게임 시간(분) 또는 화폐 포인트(P) */
 export type BoxRewardKind = 'minutes' | 'points';
 
@@ -172,7 +199,9 @@ export interface AppSettings {
   presets: Record<RoutineKey, RoutineSet>;
   /** ② 뽑기 시간을 나눠 쓴 기록 */
   timeUsage: TimeUsage[];
-  /** 🎁 선물 상자 개수 (1 ~ 5) — 상자를 열 때 이만큼 보여 줍니다. */
+  /** ⏱ 부모가 직접 더해 준 시간 (8·12번) — 남은 시간에 더해집니다 */
+  timeGrants: TimeGrant[];
+  /** 🎁 뽑기 상자 개수 (1 ~ 5) — 상자를 열 때 이만큼 보여 줍니다. */
   boxCount: number;
   /** 🏆 티어 난이도(%) — 0 이 기본 기준, 값이 클수록 승급이 어려워집니다. */
   tierDifficulty: number;
@@ -180,6 +209,12 @@ export interface AppSettings {
   burstAutoFrom: string | null;
   /** 🖼 아이 프로필 아이콘 바꾸기 (memberId → 이모지) */
   profileEmoji: Record<string, string>;
+  /** 🏷 아이가 정한 닉네임 (memberId → 닉네임) — 아이 전용 프로필 창(2번) */
+  profileNames: Record<string, string>;
+  /** 🎓 아이가 적은 학년 (memberId → '중1' 같은 글자) — 아이 전용 프로필 창(2번) */
+  profileGrades: Record<string, string>;
+  /** 🔐 부모 PIN 비상 복구 질문·코드 (1번) — 없으면 null */
+  parentRecovery: ParentRecovery | null;
   /** 🆕 부모가 만든 프로필 — DB 구성원(family_members)에 더해 화면에 함께 보입니다(추가 SQL 없음). */
   extraMembers: Member[];
   /** 🔐 프로필별 4자리 PIN — 평문은 저장하지 않고 솔트+해시만 둡니다(가족 설정 JSON). */
@@ -228,10 +263,14 @@ export function defaultAppSettings(): AppSettings {
     activePreset: 'semester',
     presets: emptyRoutines(),
     timeUsage: [],
+    timeGrants: [],
     boxCount: 3,
     tierDifficulty: 5,
     burstAutoFrom: null,
     profileEmoji: {},
+    profileNames: {},
+    profileGrades: {},
+    parentRecovery: null,
     extraMembers: [],
     profilePins: {},
     settlements: {},
@@ -458,6 +497,25 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       })
     : [];
 
+  const timeGrants: TimeGrant[] = Array.isArray(raw.timeGrants)
+    ? raw.timeGrants.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const grant = item as Partial<TimeGrant>;
+        if (typeof grant.id !== 'string' || typeof grant.member_id !== 'string') return [];
+        if (typeof grant.minutes !== 'number' || !Number.isFinite(grant.minutes)) return [];
+        if (!isIsoLike(grant.at)) return [];
+        return [
+          {
+            id: grant.id,
+            member_id: grant.member_id,
+            minutes: Math.max(1, Math.min(600, Math.round(grant.minutes))),
+            at: grant.at,
+            reason: typeof grant.reason === 'string' && grant.reason.trim() ? grant.reason.trim().slice(0, 40) : undefined,
+          },
+        ];
+      })
+    : [];
+
   const boxRewards: BoxReward[] = Array.isArray(raw.boxRewards)
     ? raw.boxRewards.flatMap((item, index) => {
         if (!item || typeof item !== 'object') return [];
@@ -491,6 +549,48 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   if (raw.profileEmoji && typeof raw.profileEmoji === 'object') {
     for (const [memberId, emoji] of Object.entries(raw.profileEmoji as Record<string, unknown>)) {
       if (typeof emoji === 'string' && emoji.trim() && emoji.length <= 8) profileEmoji[memberId] = emoji;
+    }
+  }
+
+  /** 아이가 정한 닉네임·학년 (아이 전용 프로필 창) — 빈 값은 버립니다. */
+  const profileNames: Record<string, string> = {};
+  const profileGrades: Record<string, string> = {};
+  const rawNames = raw.profileNames && typeof raw.profileNames === 'object' ? raw.profileNames : {};
+  for (const [memberId, value] of Object.entries(rawNames as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    const clean = value.trim().slice(0, 20);
+    if (clean) profileNames[memberId] = clean;
+  }
+  const rawGrades = raw.profileGrades && typeof raw.profileGrades === 'object' ? raw.profileGrades : {};
+  for (const [memberId, value] of Object.entries(rawGrades as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    const clean = value.trim().slice(0, 10);
+    if (clean) profileGrades[memberId] = clean;
+  }
+
+  // 🔐 부모 PIN 비상 복구 — 질문·답·코드 해시가 모두 갖춰졌을 때만 쓸 수 있습니다.
+  let parentRecovery: ParentRecovery | null = null;
+  const rawRecovery = raw.parentRecovery;
+  if (rawRecovery && typeof rawRecovery === 'object') {
+    const value = rawRecovery as Partial<ParentRecovery>;
+    const hexLike = (text: unknown) => typeof text === 'string' && /^[0-9a-f]{8,64}$/i.test(text);
+    const hashLike = (text: unknown) => typeof text === 'string' && /^[0-9a-f]{16,128}$/i.test(text);
+    if (
+      typeof value.question === 'string' &&
+      value.question.trim() &&
+      hexLike(value.salt) &&
+      hashLike(value.hash) &&
+      hexLike(value.codeSalt) &&
+      hashLike(value.codeHash)
+    ) {
+      parentRecovery = {
+        question: value.question.trim().slice(0, 60),
+        salt: value.salt as string,
+        hash: value.hash as string,
+        codeSalt: value.codeSalt as string,
+        codeHash: value.codeHash as string,
+        updated_at: isIsoLike(value.updated_at) ? value.updated_at : new Date().toISOString(),
+      };
     }
   }
 
@@ -594,11 +694,15 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     activePreset,
     presets,
     timeUsage: timeUsage.slice(-200),
+    timeGrants: timeGrants.slice(-200),
     boxCount,
     tierDifficulty: difficulty,
     // 자동 버스트 타임은 켠 날부터만 적용합니다 — 날짜가 없던 예전 값은 오늘부터로 잡습니다.
     burstAutoFrom,
     profileEmoji,
+    profileNames,
+    profileGrades,
+    parentRecovery,
     extraMembers: keptExtraMembers,
     profilePins,
     settlements,
@@ -906,13 +1010,42 @@ export function usedBonusMinutes(settings: AppSettings, memberId: string): numbe
     .reduce((sum, usage) => sum + usage.minutes, 0);
 }
 
-/** 뽑기로 받은 시간에서 나눠 쓴 만큼을 뺀, 지금 쓸 수 있는 시간(분) */
+/** ⏱ 부모가 직접 더해 준 시간 합계(분) — 4차 8번 */
+export function grantedBonusMinutes(settings: AppSettings, memberId: string): number {
+  return (settings.timeGrants ?? [])
+    .filter((grant) => grant.member_id === memberId)
+    .reduce((sum, grant) => sum + grant.minutes, 0);
+}
+
+/** 뽑기로 받은 시간 + 부모가 더해 준 시간에서 나눠 쓴 만큼을 뺀, 지금 쓸 수 있는 시간(분) */
 export function remainingBonusMinutes(
   settings: AppSettings,
   memberId: string,
   unusedBonus: number,
 ): number {
-  return Math.max(0, Math.round(unusedBonus) - usedBonusMinutes(settings, memberId));
+  return Math.max(
+    0,
+    Math.round(unusedBonus) + grantedBonusMinutes(settings, memberId) - usedBonusMinutes(settings, memberId),
+  );
+}
+
+/** ⏱ 부모가 시간을 직접 더한 한 줄을 남긴 새 설정 (8·12번) */
+export function addTimeGrant(
+  settings: AppSettings,
+  memberId: string,
+  minutes: number,
+  reason?: string,
+  now: Date = new Date(),
+): AppSettings {
+  const added = Math.max(1, Math.min(600, Math.round(minutes)));
+  const record: TimeGrant = {
+    id: `tg_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    member_id: memberId,
+    minutes: added,
+    at: now.toISOString(),
+    reason: reason?.trim() ? reason.trim().slice(0, 40) : undefined,
+  };
+  return { ...settings, timeGrants: [...(settings.timeGrants ?? []), record].slice(-200) };
 }
 
 /** 시간을 쓴 한 줄을 더한 새 설정 (타이머·직접 차감 모두) */
@@ -934,4 +1067,73 @@ export function addTimeUsage(
     reason: reason?.trim() ? reason.trim().slice(0, 40) : undefined,
   };
   return { ...settings, timeUsage: [...settings.timeUsage, record].slice(-200) };
+}
+
+/* ------------------------------------------------------------------ */
+/* 🏷 아이 전용 프로필 창의 기기 저장 값 (4차 2·5번)                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 아이가 자기 화면(`⋮` → 프로필 관리)에서 바꾼 닉네임·학년·아이콘·개인 PIN.
+ *
+ * 가족 설정(`family_app_settings`)은 부모 + PIN 이 있어야 저장되므로, 아이 혼자
+ * 바꾼 값은 **이 폰에만** 두고 화면에서는 가족 설정 값 위에 덮어 보여 줍니다.
+ * (부모가 자기 화면에서 바꾸면 예전처럼 가족 설정에 저장돼 폰끼리 함께 씁니다)
+ */
+export interface SelfProfile {
+  name?: string;
+  grade?: string;
+  emoji?: string;
+  /** 아이가 이 폰에서 정한 4자리 PIN — 솔트+해시만 */
+  pin?: ProfilePin;
+}
+
+export const SELF_PROFILE_KEY = 'study-check.self-profile.v1';
+
+function isPinRecord(value: unknown): value is ProfilePin {
+  if (!value || typeof value !== 'object') return false;
+  const pin = value as Partial<ProfilePin>;
+  return (
+    typeof pin.salt === 'string' &&
+    /^[0-9a-f]{8,64}$/i.test(pin.salt) &&
+    typeof pin.hash === 'string' &&
+    /^[0-9a-f]{16,128}$/i.test(pin.hash)
+  );
+}
+
+/** 저장된 기기 프로필 값을 안전하게 읽습니다. */
+export function normalizeSelfProfiles(value: unknown): Record<string, SelfProfile> {
+  const out: Record<string, SelfProfile> = {};
+  if (!value || typeof value !== 'object') return out;
+  for (const [memberId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^mem_[a-z0-9_]{2,40}$/i.test(memberId) || !raw || typeof raw !== 'object') continue;
+    const entry = raw as Partial<SelfProfile>;
+    const profile: SelfProfile = {};
+    if (typeof entry.name === 'string' && entry.name.trim()) profile.name = entry.name.trim().slice(0, 20);
+    if (typeof entry.grade === 'string' && entry.grade.trim()) profile.grade = entry.grade.trim().slice(0, 10);
+    if (typeof entry.emoji === 'string' && entry.emoji.trim()) profile.emoji = entry.emoji.trim().slice(0, 8);
+    if (isPinRecord(entry.pin)) profile.pin = { salt: entry.pin.salt, hash: entry.pin.hash };
+    if (Object.keys(profile).length > 0) out[memberId] = profile;
+  }
+  return out;
+}
+
+export function loadSelfProfiles(): Record<string, SelfProfile> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(SELF_PROFILE_KEY);
+    if (!raw) return {};
+    return normalizeSelfProfiles(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+export function saveSelfProfiles(profiles: Record<string, SelfProfile>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(SELF_PROFILE_KEY, JSON.stringify(profiles));
+  } catch {
+    /* 저장 공간이 없어도 화면은 그대로 씁니다. */
+  }
 }
