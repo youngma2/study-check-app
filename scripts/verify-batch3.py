@@ -90,7 +90,7 @@ def start_server():
 
 def rest_count(table: str) -> int:
     request = urllib.request.Request(
-        f'{SUPABASE}/rest/v1/{table}?select=id',
+        f'{SUPABASE}/rest/v1/{table}?select=*',
         headers={'apikey': KEY, 'Authorization': f'Bearer {KEY}', 'Prefer': 'count=exact', 'Range': '0-0'},
     )
     with urllib.request.urlopen(request, timeout=25) as response:
