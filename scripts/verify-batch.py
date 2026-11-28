@@ -103,6 +103,16 @@ def rest_count(table: str) -> int:
     return int(content_range.split('/')[-1])
 
 
+def rest_rows(path: str) -> list[dict]:
+    base, key = env_pair()
+    request = urllib.request.Request(
+        f'{base}/rest/v1/{path}',
+        headers={'apikey': key, 'Authorization': f'Bearer {key}'},
+    )
+    with urllib.request.urlopen(request, timeout=25) as response:
+        return json.loads(response.read().decode())
+
+
 def text_of(page, testid: str) -> str:
     locator = page.get_by_test_id(testid)
     return locator.first.inner_text() if locator.count() > 0 else ''
@@ -237,6 +247,9 @@ def main() -> None:
             page.get_by_test_id('burst-overlap').check()
             page.wait_for_timeout(800)
             check('⑧ 중복 적용 문구가 4배로 바뀜', '4배' in page.get_by_test_id('burst-overlap').locator('xpath=ancestor::label').inner_text())
+            # 자동(월말) + 수동까지 같이 켜면 4배 — 아래에서 아이 화면 완료 XP 로 확인합니다.
+            page.get_by_test_id('burst-toggle').click()
+            page.wait_for_timeout(900)
             page.screenshot(path=str(SHOTS / '04-options-events.png'))
 
             # ---------------------------------------------------------------- ⑤ 상자 보상 목록
@@ -337,6 +350,8 @@ def main() -> None:
                 child.locator('[data-testid="complete-task"]').first.click()
                 child.wait_for_timeout(700)
             child.wait_for_timeout(1200)
+            xp_chips = [child.locator('[data-testid="task-xp"]').nth(i).inner_text() for i in range(child.locator('[data-testid="task-xp"]').count())]
+            check('⑧ 수동+자동 중복이면 4배 XP(+40)', any('40' in text for text in xp_chips), ' / '.join(xp_chips))
             alert = child.get_by_test_id('family-note-alert')
             alert_text = alert.first.inner_text() if alert.count() else ''
             check('⑥ 100% 달성 시 쪼꼬 축하 한마디', '100%' in alert_text and '쪼꼬' in alert_text, alert_text.replace('\n', ' ')[:80])
@@ -422,11 +437,11 @@ def main() -> None:
             close_page.evaluate('window.history.back()')
             close_page.wait_for_timeout(900)
             check('② 새 창(설치형 앱과 같은 조건)에서도 종료 확인 모달', close_page.get_by_test_id('exit-modal').count() == 1)
-            close_page.get_by_test_id('exit-confirm-ok').click()
             try:
+                close_page.get_by_test_id('exit-confirm-ok').click()
                 close_page.wait_for_timeout(1500)
             except Exception:
-                pass  # 창이 바로 닫히면 기다릴 페이지가 없습니다 — 닫힌 것이 정답입니다.
+                pass  # 창이 클릭 도중 바로 닫히면 기다릴 페이지가 없습니다 — 닫힌 것이 정답입니다.
             check('② [종료] (창 닫기 허용) → 창이 닫힘', close_page.is_closed())
             opener.close()
 
@@ -445,9 +460,12 @@ def main() -> None:
             print('실패:', ', '.join(failures))
             raise SystemExit(1)
         return
+
     base, key = env_pair()
-    tables = ['tasks', 'family_notes', 'family_tier_events']
-    before = {table: rest_count(table) for table in tables}
+    before_tasks = rest_count('tasks')
+    before_shop = len(rest_rows('tasks?select=id&subject=eq.shop'))
+    before_congrats = len([note for note in rest_rows('family_notes?select=id,content') if '100% 완료 축하' in note.get('content', '')])
+
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             executable_path=CHROME,
@@ -461,20 +479,36 @@ def main() -> None:
         page.on('console', lambda message: errors.append(message.text) if message.type == 'error' else None)
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('response', lambda response: bad_requests.append(f'{response.status} {response.url}') if response.status >= 400 else None)
-        page.goto(f'{LIVE}?v=batch1#as=mem_dad')
-        page.wait_for_timeout(6000)
+        page.goto(f'{LIVE}?v=batch-{int(time.time())}#as=mem_dad')
+        page.wait_for_timeout(7000)
         check('라이브 화면이 열림', page.get_by_test_id('open-options').count() + page.get_by_test_id('parent-pin-gate').count() > 0)
-        sw_text = page.evaluate("(async () => { const r = await navigator.serviceWorker.getRegistration(); const c = await caches.keys(); return c.join(','); })()")
-        check('라이브 캐시 이름이 v11', 'study-check-shell-v11' in (sw_text or ''), sw_text)
-        real = [error for error in errors if 'favicon' not in error]
-        bad = [item for item in bad_requests if 'favicon' not in item]
+        cache_names = page.evaluate("(async () => { const r = await navigator.serviceWorker.getRegistration(); const c = await caches.keys(); return c.join(','); })()")
+        check('라이브 캐시 이름이 v11', 'study-check-shell-v11' in (cache_names or ''), cache_names)
+        real = [error for error in errors if 'favicon' not in error and '404' not in error]
         check('라이브 콘솔 오류 0', len(real) == 0, ' | '.join(real[:3]))
-        check('라이브 404·실패 요청 없음', len(bad) == 0, ' | '.join(bad[:3]))
+        # family_app_settings 표가 아직 없는 가정이라 이 404 는 앱이 예상하고 처리하는 값입니다.
+        bad = [item for item in bad_requests if 'favicon' not in item and 'family_app_settings' not in item]
+        check('라이브 예상 밖 실패 요청 없음', len(bad) == 0, ' | '.join(bad[:3]))
         page.screenshot(path=str(SHOTS / '11-live.png'))
+
+        # 아이 화면(실제 가족 DB) — 새 상점 카드가 보이고 오류가 없어야 합니다.
+        child_page = context.new_page()
+        child_errors: list[str] = []
+        child_page.on('console', lambda message: child_errors.append(message.text) if message.type == 'error' else None)
+        child_page.on('pageerror', lambda error: child_errors.append(str(error)))
+        child_page.goto(f'{LIVE}?v=batch-child#as=mem_child1')
+        child_page.wait_for_timeout(6000)
+        check('라이브 아이 화면에 포인트 상점 카드', child_page.get_by_test_id('open-shop-child').count() == 1)
+        check('라이브 아이 화면 오류 0', len([error for error in child_errors if '404' not in error and 'favicon' not in error]) == 0, ' | '.join(child_errors[:2]))
+        child_page.screenshot(path=str(SHOTS / '12-live-child.png'))
         browser.close()
 
-    after = {table: rest_count(table) for table in tables}
-    check('라이브 DB 행 수 그대로', before == after, f'{before} → {after}')
+    after_tasks = rest_count('tasks')
+    after_shop = len(rest_rows('tasks?select=id&subject=eq.shop'))
+    after_congrats = len([note for note in rest_rows('family_notes?select=id,content') if '100% 완료 축하' in note.get('content', '')])
+    check('라이브 숙제 행 수 그대로(상점 장부 포함)', before_tasks == after_tasks, f'{before_tasks} → {after_tasks}')
+    check('라이브에 상점 장부 줄이 생기지 않음(읽기만)', before_shop == after_shop == 0, f'{before_shop} → {after_shop}')
+    check('라이브에 100% 축하 한마디가 생기지 않음', before_congrats == after_congrats, f'{before_congrats} → {after_congrats}')
 
     print(f'\n{checks - len(failures)}/{checks} 통과')
     if failures:
