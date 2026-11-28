@@ -1287,7 +1287,21 @@ export function StudyProvider({ children }: { children: ReactNode }) {
   );
 
   const addTask = useCallback(
-    (input: NewTaskInput) => run((current, actor) => addTaskPure(current, actor, input)),
+    (input: NewTaskInput) => {
+      // 🆕 부모가 만든 프로필(설정 JSON)이 아직 가족 DB 구성원표에 없으면, 서버가 거절합니다.
+      //    그 자리에서 알아보기 쉽게 안내합니다(함수가 들어 있으면 db.members 에 있어 그냥 저장됩니다).
+      const extraOnly =
+        modeRef.current === 'supabase' &&
+        appSettingsRef.current.extraMembers.some((member) => member.id === input.member_id) &&
+        !dbRef.current.members.some((member) => member.id === input.member_id);
+      if (extraOnly) {
+        return Promise.resolve({
+          ok: false,
+          error: '새로 만든 프로필은 아직 가족 DB에 등록되지 않았어요 · 부모님이 설정 페이지(setup.html)의 SQL을 한 번 실행하면 공부가 저장돼요.',
+        });
+      }
+      return run((current, actor) => addTaskPure(current, actor, input));
+    },
     [run],
   );
 
