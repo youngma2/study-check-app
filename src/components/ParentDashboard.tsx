@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { usedBonusMinutes } from '../lib/app-settings';
+import { pointPrizeEventIds } from '../lib/shop';
 import { cx } from '../lib/cx';
 import { fromISODate, koreaTodayISO, WEEKDAY_LABELS } from '../lib/date';
 import { displayGrade } from '../lib/grade';
@@ -47,10 +48,17 @@ function useReports(period: Period) {
     () =>
       study.children.map((member) => ({
         member,
-        report: computeMemberReport(study.db.tasks, study.tierEvents, member.id, period, today),
+        report: computeMemberReport(
+          study.db.tasks,
+          study.tierEvents,
+          member.id,
+          period,
+          today,
+          pointPrizeEventIds(study.db.tasks),
+        ),
         unusedAll: Math.max(
           0,
-          unusedBonusMinutes(study.tierEvents, member.id) -
+          unusedBonusMinutes(study.tierEvents, member.id, pointPrizeEventIds(study.db.tasks)) -
             usedBonusMinutes(study.appSettings, member.id),
         ),
         tier: study.seasonStatsFor(member.id)?.level ?? null,

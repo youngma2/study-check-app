@@ -1,9 +1,11 @@
 import { daysBetweenISO, formatDayTitle, holidayName, koreaTodayISO, relativeDayLabel } from '../lib/date';
+import { burstOnDate } from '../lib/app-settings';
 import { delayName, xpPercentForDelay } from '../lib/season';
 import type { TaskSummary } from '../lib/store';
 import { memberTheme } from '../lib/theme';
 import type { Member } from '../lib/types';
 import { cx } from '../lib/cx';
+import { useStudy } from '../lib/study-context';
 import { TierEmblemFor } from './TierBadge';
 
 /** 그 날 한 사람의 진행 상황 — 이름은 항상 members 에서 오고, 코드에 이름을 적지 않습니다. */
@@ -194,6 +196,8 @@ export function DayOverview({
   const label = relativeDayLabel(dateIso);
   const holiday = holidayName(dateIso);
   const split = memberSummaries.length > 1;
+  const study = useStudy();
+  const burst = burstOnDate(dateIso, study.appSettings);
 
   return (
     <>
@@ -219,6 +223,14 @@ export function DayOverview({
                 className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[9.5px] font-extrabold text-rose-600 ring-1 ring-rose-200/70"
               >
                 {holiday}
+              </span>
+            ) : null}
+            {burst ? (
+              <span
+                data-testid="day-burst"
+                className="rounded-full bg-orange-100 px-1.5 py-0.5 text-[9.5px] font-extrabold text-orange-700 ring-1 ring-orange-200/70"
+              >
+                🔥 버스트 타임 · 경험치 2배
               </span>
             ) : null}
           </div>

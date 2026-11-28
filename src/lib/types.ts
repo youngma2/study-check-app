@@ -78,6 +78,8 @@ export interface StudyDB {
 }
 
 export interface NewTaskInput {
+  /** 미리 정한 id (상점 장부처럼 여러 폰에서 같은 줄이 겹치지 않게 할 때) — 없으면 새로 만듭니다. */
+  id?: string;
   member_id: string;
   title: string;
   subject: string;

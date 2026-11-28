@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOverlayBack } from '../lib/back-guard';
 import { cx } from '../lib/cx';
 import { formatShortDate, toISODate } from '../lib/date';
@@ -19,8 +19,9 @@ import {
   setRewardSoundOn,
   unlockRewardAudio,
 } from '../lib/reward-sound';
-import { DEFAULT_REWARD_POOL } from '../lib/season';
+import { DEFAULT_BOX_REWARDS, boxRewardFor, type BoxReward } from '../lib/app-settings';
 import type { TierEvent } from '../lib/rewards';
+import { boxPointPrize } from '../lib/shop';
 import { useStudy } from '../lib/study-context';
 import { DIVISIONS } from '../lib/season';
 import { TIER_LABEL } from './TierBadge';
@@ -39,32 +40,24 @@ import { XIcon } from './icons';
  * 어느 상자를 골라도 그 값이 당첨이 됩니다(서버·기기 모두 같은 값 — 새로고침해도 그대로).
  */
 
-/** 당첨 값 외에 나머지 두 상자에 보여 줄 값 — 보상 풀에서 서로 다른 숫자로. */
-function pickOtherMinutes(pool: number[], minutes: number): [number, number] {
-  const values = (pool.length > 0 ? pool : DEFAULT_REWARD_POOL).filter(
-    (value) => Number.isFinite(value) && value >= 1 && value <= 120 && value !== minutes,
-  );
-  const picked: number[] = [];
-  const candidates = [...values];
-  while (picked.length < 2 && candidates.length > 0) {
-    picked.push(candidates.splice(Math.floor(Math.random() * candidates.length), 1)[0]);
+/** 당첨 값 외에 나머지 두 상자에 보여 줄 보상 — 보상 목록에서 서로 다른 것 두 개 */
+function pickOtherRewards(rewards: BoxReward[], won: BoxReward): BoxReward[] {
+  const list = rewards.length > 0 ? rewards : DEFAULT_BOX_REWARDS;
+  const pool = [...list];
+  const picked: BoxReward[] = [];
+  while (picked.length < 2 && pool.length > 0) {
+    const index = Math.floor(Math.random() * pool.length);
+    const [item] = pool.splice(index, 1);
+    // 같은 분·P 값이 이미 보여 준 것과 같으면 건너뜁니다(다르면 다른 값도 섞어 보여 줍니다).
+    if (item.kind === won.kind && item.value === won.value) continue;
+    picked.push(item);
   }
-  let delta = 5;
-  while (picked.length < 2 && delta <= 60) {
-    for (const candidate of [minutes + delta, minutes - delta]) {
-      if (candidate >= 1 && candidate <= 120 && candidate !== minutes && !picked.includes(candidate)) {
-        picked.push(candidate);
-        break;
-      }
-    }
-    delta += 5;
-  }
-  while (picked.length < 2) picked.push(minutes);
-  return [picked[0], picked[1]];
+  while (picked.length < 2) picked.push(won);
+  return picked;
 }
 
-function shufflePositions(values: [number, number]): [number, number] {
-  return Math.random() < 0.5 ? [values[0], values[1]] : [values[1], values[0]];
+function rewardLabel(reward: BoxReward): string {
+  return `+${reward.value}${reward.kind === 'points' ? 'P' : '분'}`;
 }
 
 interface RewardGiftModalProps {
@@ -81,7 +74,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
   const study = useStudy();
   const [stage, setStage] = useState<Stage>('choose');
   const [picked, setPicked] = useState<number | null>(null);
-  const [others, setOthers] = useState<[number, number] | null>(null);
+  const [others, setOthers] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState<boolean>(() => isRewardSoundOn());
   const [markingUsed, setMarkingUsed] = useState(false);
@@ -89,16 +82,22 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
   const timers = useRef<number[]>([]);
   const alive = useRef(true);
 
-  const minutes = event.box_minutes ?? 0;
+  /** 이 상자의 보상 — 분 또는 화폐 포인트(P).
+   *  이미 연 상자는 그때 정산된 값을 그대로 보여 줍니다(보상 목록을 고쳐도 과거 상자는 안 바뀜). */
+  const frozenPoints = event.opened_at ? boxPointPrize(study.db.tasks, event.id) : null;
+  const won: { kind: 'minutes' | 'points'; value: number } =
+    frozenPoints !== null
+      ? { kind: 'points', value: frozenPoints }
+      : event.opened_at
+        ? { kind: 'minutes', value: event.box_minutes ?? 0 }
+        : boxRewardFor(study.appSettings.boxRewards, event.id, event.box_minutes);
+  const wonReward: BoxReward = { id: 'won', kind: won.kind, value: won.value };
+  const isPoints = won.kind === 'points';
+  const unit = isPoints ? 'P' : '분';
   const tierLabel = `${TIER_LABEL[event.tier]}${
     event.division >= 1 && event.division <= 3 ? ` ${DIVISIONS[event.division]}` : ''
   }`;
   const dateLabel = formatShortDate(toISODate(new Date(event.created_at))).replace(/\s*\(.\)$/, '');
-  const pool = useMemo(
-    () => (study.rewardSettings.pool.length > 0 ? study.rewardSettings.pool : DEFAULT_REWARD_POOL),
-    [study.rewardSettings.pool],
-  );
-
   const clearTimers = useCallback(() => {
     for (const timer of timers.current) window.clearTimeout(timer);
     timers.current = [];
@@ -143,8 +142,8 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
     setStage('opening');
     setError(null);
 
-    const [a, b] = shufflePositions(pickOtherMinutes(pool, minutes));
-    setOthers([a, b]);
+    const otherList = pickOtherRewards(study.appSettings.boxRewards, wonReward).map(rewardLabel);
+    setOthers(Math.random() < 0.5 ? otherList : [otherList[1], otherList[0]]);
 
     // 두근두근 — 흔들림·심장 소리·짧은 진동
     later(100, () => {
@@ -207,7 +206,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
 
   const othersText =
     others && picked !== null
-      ? `다른 상자엔 +${others[0]}분, +${others[1]}분이 있었어요!`
+      ? `다른 상자엔 ${others[0]}, ${others[1]}가 있었어요!`
       : '';
 
   return (
@@ -296,7 +295,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
             const isPicked = picked === index;
             const isOpen = stage === 'revealed';
             const otherIndex = picked === null ? 0 : index < picked ? index : index - 1;
-            const otherValue = others ? others[otherIndex] : 0;
+            const otherValue = others ? others[otherIndex] : '';
             return (
               <button
                 key={index}
@@ -305,9 +304,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
                 onClick={() => choose(index)}
                 disabled={stage !== 'choose'}
                 aria-label={
-                  isPicked && isOpen
-                    ? `고른 상자 — +${minutes}분`
-                    : `상자 ${index + 1} 고르기`
+                  isPicked && isOpen ? `고른 상자 — ${rewardLabel(wonReward)}` : `상자 ${index + 1} 고르기`
                 }
                 className={cx(
                   'relative flex aspect-[4/5] flex-col items-center justify-center rounded-2xl text-center ring-1 transition',
@@ -324,13 +321,15 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
                       data-testid="reward-win-minutes"
                       className="block text-[22px] font-extrabold leading-none text-amber-600"
                     >
-                      +{minutes}분
+                      +{wonReward.value}{unit}
                     </span>
-                    <span className="mt-1 block text-[9.5px] font-extrabold text-amber-500">게임 시간</span>
+                    <span className="mt-1 block text-[9.5px] font-extrabold text-amber-500">
+                      {isPoints ? '화폐 포인트' : '게임 시간'}
+                    </span>
                   </span>
                 ) : isOpen ? (
                   <span className="animate-peek px-1 opacity-80">
-                    <span className="block text-[15px] font-extrabold leading-none text-slate-500">+{otherValue}분</span>
+                    <span className="block text-[15px] font-extrabold leading-none text-slate-500">{otherValue}</span>
                     <span className="mt-1 block text-[8px] font-bold text-slate-400">다른 상자</span>
                   </span>
                 ) : (
@@ -365,7 +364,10 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
             <p className="text-[11px] font-bold leading-relaxed text-slate-500">
               마음에 드는 상자를 눌러 봐.<br />
               <span className="text-[10px] font-semibold text-slate-400">
-                {pool.map((value) => `+${value}분`).join(' · ')} 중에서 나와요
+                {(study.appSettings.boxRewards.length > 0 ? study.appSettings.boxRewards : DEFAULT_BOX_REWARDS)
+                  .map(rewardLabel)
+                  .join(' · ')}{' '}
+                중에서 나와요
               </span>
             </p>
           ) : null}
@@ -379,7 +381,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
           {stage === 'revealed' ? (
             <div data-testid="reward-result" className="space-y-1.5">
               <p className="text-[13px] font-extrabold text-slate-900">
-                {memberName}, <span className="text-amber-600">+{minutes}분 게임 시간</span> 획득!
+                {memberName}, <span className="text-amber-600">+{wonReward.value}{unit}{isPoints ? '' : ' 게임 시간'}</span> 획득!
               </p>
               <p data-testid="reward-others" className="text-[10.5px] font-bold text-slate-500">
                 {othersText}
@@ -400,7 +402,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
         </div>
 
         <div className="mt-1 flex gap-2">
-          {stage === 'revealed' && study.isParent && !used ? (
+          {stage === 'revealed' && study.isParent && !used && !isPoints ? (
             <button
               type="button"
               data-testid="reward-modal-use"

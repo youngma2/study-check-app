@@ -130,6 +130,8 @@ export function computeMemberReport(
   memberId: string,
   period: Period,
   todayIso: string = koreaTodayISO(),
+  /** 포인트(P)로 정산된 상자 id — 그 상자의 시간은 '게임 시간' 집계에서 뺍니다 */
+  pointPrizeIds: Set<string> = new Set(),
 ): MemberReport {
   const counts = dayCounts(tasks, memberId);
   const days: DayReport[] = [];
@@ -159,7 +161,13 @@ export function computeMemberReport(
   }
 
   const lines: RewardLine[] = tierEvents
-    .filter((event) => event.member_id === memberId && event.box_minutes !== null && event.opened_at)
+    .filter(
+      (event) =>
+        event.member_id === memberId &&
+        event.box_minutes !== null &&
+        event.opened_at &&
+        !pointPrizeIds.has(event.id),
+    )
     .map((event) => {
       const when = event.opened_at ?? event.created_at;
       return {
@@ -191,10 +199,25 @@ export function computeMemberReport(
   };
 }
 
-/** 지금까지 뽑았지만 아직 안 쓴 보너스 게임 시간(기간과 무관한 전체 합계). */
-export function unusedBonusMinutes(tierEvents: TierEvent[], memberId: string): number {
+/**
+ * 지금까지 뽑았지만 아직 안 쓴 보너스 게임 시간(기간과 무관한 전체 합계).
+ * 포인트(P)가 나온 상자는 시간이 아니므로 빼고 셈합니다.
+ */
+export function unusedBonusMinutes(
+  tierEvents: TierEvent[],
+  memberId: string,
+  /** 포인트(P)로 정산된 상자 id — 시간이 아니라 P 를 받은 상자라 빼고 셈합니다. */
+  pointPrizeIds: Set<string> = new Set(),
+): number {
   return tierEvents
-    .filter((event) => event.member_id === memberId && event.box_minutes !== null && event.opened_at && !event.used_at)
+    .filter(
+      (event) =>
+        event.member_id === memberId &&
+        event.box_minutes !== null &&
+        event.opened_at &&
+        !event.used_at &&
+        !pointPrizeIds.has(event.id),
+    )
     .reduce((sum, event) => sum + (event.box_minutes ?? 0), 0);
 }
 

@@ -1,3 +1,4 @@
+import { koreaISODateOf } from './date';
 import type { TaskPreset } from './types';
 
 /**
@@ -35,13 +36,37 @@ export interface StreakBonus {
   xp: number;
 }
 
-/** 뽑기 보너스 시간을 나눠 쓴 한 줄 (타이머 시작) */
+/**
+ * 뽑기 보너스 시간을 쓴 한 줄.
+ * · mode 'timer'  — ⏱ 타이머를 돌려서 쓴 시간
+ * · mode 'direct' — 타이머 없이 시간만 바로 뺀 것(사유를 함께 남깁니다)
+ */
 export interface TimeUsage {
   id: string;
   member_id: string;
   minutes: number;
   at: string;
+  mode: 'timer' | 'direct';
+  /** 직접 차감일 때 적어 둔 사유 */
+  reason?: string;
 }
+
+/** 🎁 뽑기 상자에서 나올 수 있는 보상 — 게임 시간(분) 또는 화폐 포인트(P) */
+export type BoxRewardKind = 'minutes' | 'points';
+
+export interface BoxReward {
+  id: string;
+  kind: BoxRewardKind;
+  /** 분 또는 P */
+  value: number;
+}
+
+export const DEFAULT_BOX_REWARDS: BoxReward[] = [
+  { id: 'bx_min_5', kind: 'minutes', value: 5 },
+  { id: 'bx_min_10', kind: 'minutes', value: 10 },
+  { id: 'bx_min_15', kind: 'minutes', value: 15 },
+  { id: 'bx_min_20', kind: 'minutes', value: 20 },
+];
 
 /** '0'(일) ~ '6'(토) → 그 요일의 기본 공부 목록 */
 export type WeekdayRoutine = Record<string, TaskPreset[]>;
@@ -55,8 +80,16 @@ export interface RoutineSet {
 
 export interface AppSettings {
   version: 1;
-  /** 🔥 버스트 타임이 지금 켜져 있는지 */
+  /** 🔥 버스트 타임 **수동** 설정이 켜져 있는지 */
   burst: boolean;
+  /** 🔥 버스트 타임 **자동** 설정 — 월말 며칠 전부터 켤지 */
+  burstAuto: boolean;
+  /** 자동 설정이 시작되는 날 — 월말까지 남은 일수가 이 값보다 작으면 켜집니다(기본 7일) */
+  burstAutoDays: number;
+  /** 수동·자동이 겹칠 때 2배를 또 곱할지(4배) — 끄면 최대 2배까지만 */
+  burstOverlap: boolean;
+  /** 🎁 뽑기 상자 보상 목록 (분·포인트) */
+  boxRewards: BoxReward[];
   /** 켜 둔 시간대들 — 완료 시각이 이 안에 있으면 XP 2배(끈 뒤에도 그대로 유지) */
   burstWindows: BurstWindow[];
   /** ⑤ 연속 달성 보너스 XP (3·7·14·30일) */
@@ -90,6 +123,10 @@ export function defaultAppSettings(): AppSettings {
   return {
     version: 1,
     burst: false,
+    burstAuto: false,
+    burstAutoDays: 7,
+    burstOverlap: false,
+    boxRewards: DEFAULT_BOX_REWARDS.map((reward) => ({ ...reward })),
     burstWindows: [],
     streakBonuses: [...DEFAULT_STREAK_BONUSES],
     activePreset: 'semester',
@@ -199,14 +236,46 @@ export function normalizeAppSettings(value: unknown): AppSettings {
             member_id: usage.member_id,
             minutes: Math.max(1, Math.min(600, Math.round(usage.minutes))),
             at: usage.at,
+            // 예전 기록은 타이머로 쓴 것으로 봅니다.
+            mode: usage.mode === 'direct' ? 'direct' : 'timer',
+            reason: typeof usage.reason === 'string' && usage.reason.trim() ? usage.reason.trim().slice(0, 40) : undefined,
           },
         ];
       })
     : [];
 
+  const boxRewards: BoxReward[] = Array.isArray(raw.boxRewards)
+    ? raw.boxRewards.flatMap((item, index) => {
+        if (!item || typeof item !== 'object') return [];
+        const reward = item as Partial<BoxReward>;
+        if (typeof reward.value !== 'number' || !Number.isFinite(reward.value)) return [];
+        const value = Math.round(reward.value);
+        if (value < 1 || value > 500) return [];
+        return [
+          {
+            id: typeof reward.id === 'string' && reward.id ? reward.id : `bx_${index}_${Date.now().toString(36)}`,
+            kind: reward.kind === 'points' ? 'points' : 'minutes',
+            value,
+          },
+        ];
+      })
+    : [];
+
+  const autoDays = typeof raw.burstAutoDays === 'number' && Number.isFinite(raw.burstAutoDays)
+    ? Math.max(1, Math.min(28, Math.round(raw.burstAutoDays)))
+    : 7;
+
   return {
     version: 1,
     burst,
+    burstAuto: raw.burstAuto === true,
+    burstAutoDays: autoDays,
+    burstOverlap: raw.burstOverlap === true,
+    // 목록을 다 지운 경우에는 상자가 아무것도 주지 않게 되므로 기본 보상으로 돌아갑니다.
+    boxRewards:
+      Array.isArray(raw.boxRewards) && boxRewards.length > 0
+        ? boxRewards.slice(0, 8)
+        : DEFAULT_BOX_REWARDS.map((reward) => ({ ...reward })),
     burstWindows: cappedWindows,
     // 값을 일부러 비운 배열(보너스 없음)은 그대로 두고, 값이 아예 없을 때만 기본값을 씁니다.
     streakBonuses: Array.isArray(raw.streakBonuses)
@@ -297,19 +366,113 @@ export function toggleBurst(settings: AppSettings, on: boolean, now: Date = new 
   return { ...settings, burst: false, burstWindows: windows };
 }
 
-/** 완료한 시각이 버스트 타임 안인지 → 1 또는 2 */
-export function burstMultiplierAt(iso: string | null | undefined, windows: BurstWindow[]): number {
-  if (!iso || windows.length === 0) return 1;
+/** 그 날(한국 날짜)이 버스트 타임 안인지 — 수동(켜 둔 시간대) 또는 자동(월말) 중 하나면 켜집니다. */
+export function burstOnDate(
+  iso: string,
+  settings: Pick<AppSettings, 'burstWindows' | 'burstAuto' | 'burstAutoDays'>,
+): boolean {
+  if (settings.burstAuto && autoBurstOn(iso, settings.burstAutoDays)) return true;
+  return settings.burstWindows.some((window) => {
+    const from = koreaDateOf(window.from);
+    if (!from || from > iso) return false;
+    const to = window.to === null ? null : koreaDateOf(window.to);
+    return to === null || to >= iso;
+  });
+}
+
+/** 'YYYY-MM-DD' 의 한국 날짜 계산 도우미 (기기 시간대와 상관없이) */
+function koreaDateOf(timestamp: string): string | null {
+  const time = Date.parse(timestamp);
+  if (Number.isNaN(time)) return null;
+  return koreaISODateOf(new Date(time).toISOString());
+}
+
+/** 월말까지 남은 일수 (그 달 마지막 날이면 0) */
+export function daysUntilMonthEnd(iso: string): number {
+  const [year, month, day] = iso.split('-').map(Number);
+  const last = new Date(year, month, 0).getDate();
+  return Math.max(0, last - day);
+}
+
+/** 🔥 자동 버스트 타임 — 월말까지 남은 일수가 days 보다 작으면 그 날은 켜집니다(7 → 마지막 7일). */
+export function autoBurstOn(iso: string, days: number): boolean {
+  return daysUntilMonthEnd(iso) < Math.max(1, Math.round(days));
+}
+
+/**
+ * 완료한 시각의 버스트 배율 — 1 · 2 · 4.
+ * · 수동(켜 둔 시간대)과 자동(월말)이 겹치면 overlap 이 켜져 있을 때만 4배, 아니면 2배 한 번입니다.
+ */
+export function burstMultiplierAt(
+  iso: string | null | undefined,
+  windows: BurstWindow[],
+  options: { autoDays?: number; overlap?: boolean } = {},
+): number {
+  if (!iso) return 1;
   const time = Date.parse(iso);
   if (Number.isNaN(time)) return 1;
+
+  let manual = false;
   for (const window of windows) {
     const from = Date.parse(window.from);
     if (Number.isNaN(from)) continue;
     const to = window.to === null ? Infinity : Date.parse(window.to);
     if (Number.isNaN(to)) continue;
-    if (time >= from && time <= to) return 2;
+    if (time >= from && time <= to) {
+      manual = true;
+      break;
+    }
   }
-  return 1;
+
+  const autoDays = options.autoDays ?? 0;
+  const isoDate = koreaISODateOf(new Date(time).toISOString());
+  const auto = autoDays > 0 && isoDate !== null && autoBurstOn(isoDate, autoDays);
+
+  if (manual && auto) return options.overlap ? 4 : 2;
+  return manual || auto ? 2 : 1;
+}
+
+/** 지금(오늘) 버스트 타임이 켜져 있는지 — 화면 배너에 씁니다. */
+export function burstActiveToday(
+  settings: Pick<AppSettings, 'burstWindows' | 'burstAuto' | 'burstAutoDays'>,
+  todayIso: string,
+): boolean {
+  // 자동은 날짜로 정해지고, 수동은 '지금 켜져 있는지(burst)' 로 봅니다.
+  if (settings.burstAuto && autoBurstOn(todayIso, settings.burstAutoDays)) return true;
+  return settings.burstWindows.some((window) => window.to === null);
+}
+
+/** 분 보상만 모은 목록 — 뽑기 상자(서버·기기)가 시간을 뽑을 때 쓰는 후보입니다. */
+export function boxMinutePool(rewards: BoxReward[]): number[] {
+  const values = rewards
+    .filter((reward) => reward.kind === 'minutes')
+    .map((reward) => Math.max(1, Math.min(120, Math.round(reward.value))));
+  return values.length > 0 ? Array.from(new Set(values)) : [5, 10, 15, 20];
+}
+
+/**
+ * 상자 하나(event.id)가 어떤 보상을 줄지 — 어느 폰에서 열어도 같은 값이 나오도록 id 로 정합니다.
+ * (연출은 3택1이지만 실제 보상은 정해져 있다는 기존 규칙 그대로)
+ */
+export function boxRewardFor(
+  rewards: BoxReward[],
+  eventId: string,
+  boxMinutes: number | null,
+): { kind: BoxRewardKind; value: number } {
+  const list = rewards.length > 0 ? rewards : DEFAULT_BOX_REWARDS;
+  let hash = 0;
+  for (let index = 0; index < eventId.length; index += 1) {
+    hash = (hash * 31 + eventId.charCodeAt(index)) >>> 0;
+  }
+  const pick = list[hash % list.length];
+  if (pick.kind === 'points') return { kind: 'points', value: Math.max(1, Math.round(pick.value)) };
+  // 분 보상은 상자에 이미 정해진 값(서버·기기 기록)을 씁니다 — 타이머와 숫자가 어긋나지 않게.
+  return { kind: 'minutes', value: boxMinutes && boxMinutes > 0 ? boxMinutes : Math.max(1, Math.round(pick.value)) };
+}
+
+/** 그 상자가 포인트 보상인지 (분 보너스 계산에서 빼야 하는지) */
+export function boxIsPointsPrize(rewards: BoxReward[], eventId: string): boolean {
+  return boxRewardFor(rewards, eventId, null).kind === 'points';
 }
 
 /** 연속 달성 보너스가 붙는 날인지 — 정확히 그 날수일 때만(그 날 하루분). */
@@ -346,11 +509,13 @@ export function remainingBonusMinutes(
   return Math.max(0, Math.round(unusedBonus) - usedBonusMinutes(settings, memberId));
 }
 
-/** 타이머 시작 한 줄을 더한 새 설정 */
+/** 시간을 쓴 한 줄을 더한 새 설정 (타이머·직접 차감 모두) */
 export function addTimeUsage(
   settings: AppSettings,
   memberId: string,
   minutes: number,
+  mode: 'timer' | 'direct' = 'timer',
+  reason?: string,
   now: Date = new Date(),
 ): AppSettings {
   const used = Math.max(1, Math.round(minutes));
@@ -359,6 +524,8 @@ export function addTimeUsage(
     member_id: memberId,
     minutes: used,
     at: now.toISOString(),
+    mode,
+    reason: reason?.trim() ? reason.trim().slice(0, 40) : undefined,
   };
   return { ...settings, timeUsage: [...settings.timeUsage, record].slice(-200) };
 }

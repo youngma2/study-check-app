@@ -14,6 +14,7 @@
  */
 
 import { fromISODate } from './date';
+import { isShopTask } from './shop';
 import type { Member, Task, TaskPreset } from './types';
 
 /** 요일 패턴에 따라 다시 넣지 않는 항목 (격주로 하는 것) — 제목에 이 말이 들어가면 건너뜁니다. */
@@ -55,7 +56,8 @@ export function defaultItemsForDay(
   routines?: Record<string, TaskPreset[]>,
 ): DefaultListItem[] {
   const pattern = patternDaysFor(targetIso);
-  const mine = tasks.filter((task) => task.member_id === member.id);
+  // 상점 장부(상품·포인트)는 공부 목록이 아니므로 처음부터 뺍니다.
+  const mine = tasks.filter((task) => task.member_id === member.id && !isShopTask(task));
 
   const taken = new Set(
     mine.filter((task) => task.due_date === targetIso).map((task) => keyOf(task)),

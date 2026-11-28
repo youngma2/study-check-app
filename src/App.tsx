@@ -8,19 +8,20 @@ import { FamilyNotesBoard } from './components/FamilyNotesBoard';
 import { ParentDashboard, ParentWeekSummary } from './components/ParentDashboard';
 import { ParentPinGate } from './components/ParentPinGate';
 import { OptionsPage } from './components/OptionsPage';
+import { ShopPage } from './components/ShopPage';
 import { TimerPanel } from './components/TimerPanel';
 import { ProfileSheet } from './components/ProfileSheet';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
-import { CopyIcon, LockIcon, PlusIcon, UndoIcon, XIcon } from './components/icons';
-import { streakBonusXp, routinesForMember } from './lib/app-settings';
+import { CopyIcon, LockIcon, PlusIcon, XIcon } from './components/icons';
 import { closeTopOverlay, useOverlayBack } from './lib/back-guard';
+import { streakBonusXp } from './lib/app-settings';
 import { playNoteChime } from './lib/chime';
 import { vibrateNoteAlert } from './lib/haptics';
-import { addDays, formatTimeKo, fromISODate, isFutureDate, isRestDay, koreaTodayISO, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
-import { defaultItemsForDay } from './lib/defaults';
+import { addDays, formatTimeKo, fromISODate, isFutureDate, koreaTodayISO, startOfWeek, toISODate, todayISO, weekDates } from './lib/date';
 import { deepLinkDate } from './lib/deeplink';
 import { JJOKKO_EMOJI, formatNoteTime, noteAuthorName, noteBody, noteDate } from './lib/notes';
 import { summarize } from './lib/store';
+import { pointsFor } from './lib/shop';
 import { formatXp, xpChangeForStatus } from './lib/season';
 import { useStudy, type ActionResult } from './lib/study-context';
 import { useTimer } from './lib/timer-context';
@@ -126,13 +127,13 @@ export default function App() {
   const [dashboardOpen, setDashboardOpen] = useState(false);
   /** ⚙️ 부모 전용 옵션(기본 공부 목록·버스트 타임·연속 보너스) */
   const [optionsOpen, setOptionsOpen] = useState(false);
+  /** 🛒 포인트 상점 */
+  const [shopOpen, setShopOpen] = useState(false);
   /** ⏱ 부모 전용 시간 타이머 */
   const [timerOpen, setTimerOpen] = useState(false);
   /** 📱 뒤로가기로 앱을 닫으려 할 때 띄우는 확인 */
   const [exitOpen, setExitOpen] = useState(false);
   const timer = useTimer();
-  const [fillingDefaults, setFillingDefaults] = useState(false);
-  const fillingDefaultsRef = useRef(false);
   /** 브라우저 알림 권한 ('unsupported' = 이 브라우저에 알림 기능 없음) */
   const [notifyPermission, setNotifyPermission] = useState<'granted' | 'denied' | 'default' | 'unsupported'>(
     () => (typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'),
@@ -193,25 +194,50 @@ export default function App() {
     };
   }, []);
 
-  /** [종료] 를 누르면 그때만 앱을 떠납니다(가드로 쌓은 기록을 되돌리고 한 번 더 나감). */
+  /**
+   * [종료] — ① 설치형 앱에서는 창을 실제로 닫아 보고,
+   *        ② 안 닫히면 가드로 쌓아 둔 기록을 한 칸씩 되돌아 나가 이전 화면(또는 홈 화면)으로 나갑니다.
+   *        (기록 수를 세지 않아도 되게, 한 칸씩 뒤로 가며 페이지가 떠날 때까지 반복합니다)
+   */
   const confirmExit = () => {
     setExitOpen(false);
     const handler = popHandlerRef.current;
     if (handler) window.removeEventListener('popstate', handler);
     popHandlerRef.current = null;
+
     try {
       window.close();
     } catch {
-      /* 설치형 앱이 아니면 close 는 막혀 있을 수 있습니다. */
+      /* 브라우저 탭이면 close 는 막혀 있습니다 — 아래에서 이전 화면으로 나갑니다. */
     }
-    window.history.back();
-    window.setTimeout(() => window.history.back(), 160);
+
+    window.setTimeout(() => {
+      let hops = 0;
+      const step = () => {
+        hops += 1;
+        if (hops > 30) {
+          // 여기까지 남아 있다면 돌아갈 기록이 없는 창입니다(첫 화면).
+          if (document.visibilityState === 'visible') {
+            setToast('이 창은 브라우저가 닫기를 막았어요 · 홈 버튼으로 앱을 닫아 주세요');
+          }
+          return;
+        }
+        try {
+          window.history.back();
+        } catch {
+          /* 기록을 못 다루는 환경 */
+        }
+        window.setTimeout(step, 150);
+      };
+      step();
+    }, 220);
   };
 
   useOverlayBack(profileOpen, () => setProfileOpen(false));
   useOverlayBack(formOpen, () => setFormOpen(false));
   useOverlayBack(copySources !== null, () => setCopySources(null));
   useOverlayBack(dashboardOpen, () => setDashboardOpen(false));
+  useOverlayBack(shopOpen, () => setShopOpen(false));
   useOverlayBack(exitOpen, () => setExitOpen(false));
 
   const latestUnseen = unseenNotes[0] ?? null;
@@ -534,77 +560,6 @@ export default function App() {
     if (back) study.setCurrentMember(back);
   };
 
-  /**
-   * 기본 목록 — 고른 날짜에 그 아이가 같은 요일 패턴(토 / 월·수·금 / 화·목)에 하던 항목을
-   * 한 번에 '할 일'로 넣습니다. 지난 기록이 없으면 그 아이의 빠른 추가 항목을 씁니다.
-   * 공휴일·일요일에는 넣지 않습니다.
-   */
-  const handleFillDefaults = async () => {
-    if (!isParent || fillingDefaultsRef.current) return;
-    if (isRestDay(selectedDate)) {
-      notify('쉬는 날에는 기본 목록을 넣지 않아요');
-      return;
-    }
-
-    fillingDefaultsRef.current = true;
-    setFillingDefaults(true);
-    let added = 0;
-    let failed = 0;
-    let firstError: string | undefined;
-    try {
-      for (const member of visibleMembers) {
-        const routines = routinesForMember(study.appSettings, member.id);
-        for (const item of defaultItemsForDay(study.db.tasks, member, selectedDate, routines)) {
-          const result = await addTask({
-            member_id: member.id,
-            title: item.title,
-            subject: item.subject,
-            due_date: selectedDate,
-          });
-          if (result.ok) added += 1;
-          else {
-            failed += 1;
-            firstError = firstError ?? result.error;
-          }
-        }
-      }
-    } finally {
-      fillingDefaultsRef.current = false;
-      setFillingDefaults(false);
-    }
-
-    if (added > 0) {
-      notify(
-        failed > 0
-          ? `기본 목록 ${added}개를 추가했어요 · ${failed}개는 넣지 못했어요`
-          : `기본 목록 ${added}개를 추가했어요`,
-      );
-      return;
-    }
-    notify(failed > 0 ? firstError ?? '기본 목록을 넣지 못했어요' : '기본 목록이 이미 다 들어 있어요');
-  };
-
-  /** 어제 공부를 오늘(보고 있는 날)로 한 번에 가져옵니다. */
-  const handleCopyYesterday = async () => {
-    const yesterday = toISODate(addDays(fromISODate(selectedDate), -1));
-    const sources = visibleMembers.flatMap((member) => tasksForView(member.id, yesterday));
-    if (sources.length === 0) {
-      notify('어제는 복사할 공부가 없었어요');
-      return;
-    }
-    const result = await copyTasks(
-      sources.map((task) => task.id),
-      [selectedDate],
-    );
-    if (!result.ok) {
-      notify(result.error ?? '복사하지 못했어요');
-      return;
-    }
-    const parts = [`어제 공부 ${result.created}개를 가져왔어요`];
-    if (result.skipped > 0) parts.push(`이미 있어서 ${result.skipped}개는 건너뛰었어요`);
-    notify(parts.join(' · '));
-  };
-
   const parentLocked = isParent && (!parentUnlocked || parentGateForced);
 
   const defaultAddMemberId = isParent
@@ -780,42 +735,54 @@ export default function App() {
         {/* 📊 엄마·아빠 전용 — 이번 주 간단 요약(누르면 상세 대시보드). 아이 화면에는 없습니다. */}
         {isParent ? <ParentWeekSummary onOpen={() => setDashboardOpen(true)} /> : null}
 
-        {/* ⚙️ 엄마·아빠 전용 도구 — 시간 타이머 · 옵션 */}
+        {/* ⚙️ 엄마·아빠 전용 도구 — 시간 타이머 · 옵션 · 포인트 상점 */}
         {isParent ? (
-          <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+          <div className="mt-2.5 grid grid-cols-3 gap-1.5">
             <button
               type="button"
               data-testid="open-timer"
               onClick={() => setTimerOpen(true)}
-              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2.5 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
             >
-              <span className="text-[11.5px] font-extrabold text-slate-800">⏱ 시간 타이머</span>
-              <span className="text-[9px] font-bold text-slate-400">뽑기 시간 나눠 쓰기</span>
+              <span className="text-[11px] font-extrabold text-slate-800">⏱ 시간 타이머</span>
+              <span className="text-[8.5px] font-bold text-slate-400">뽑기 시간 쓰기</span>
             </button>
             <button
               type="button"
               data-testid="open-options"
               onClick={() => setOptionsOpen(true)}
-              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2.5 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
             >
-              <span className="text-[11.5px] font-extrabold text-slate-800">⚙️ 옵션</span>
-              <span className="text-[9px] font-bold text-slate-400">공부 목록 · 이벤트</span>
+              <span className="text-[11px] font-extrabold text-slate-800">⚙️ 옵션</span>
+              <span className="text-[8.5px] font-bold text-slate-400">공부 목록 · 이벤트</span>
+            </button>
+            <button
+              type="button"
+              data-testid="open-shop"
+              onClick={() => setShopOpen(true)}
+              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+            >
+              <span className="text-[11px] font-extrabold text-slate-800">🛒 포인트 상점</span>
+              <span className="text-[8.5px] font-bold text-slate-400">상품 · 구매 내역</span>
             </button>
           </div>
         ) : null}
 
-        {isParent ? (
+        {/* 🛒 아이 화면 — 내 포인트와 상점 */}
+        {!isParent ? (
           <button
             type="button"
-            data-testid="fill-defaults"
-            onClick={handleFillDefaults}
-            disabled={fillingDefaults}
-            className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-indigo-50 py-2.5 text-[12px] font-extrabold text-indigo-700 ring-1 ring-indigo-200 transition active:scale-[0.98] disabled:opacity-60"
+            data-testid="open-shop-child"
+            onClick={() => setShopOpen(true)}
+            className="mt-2.5 flex w-full items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-2.5 text-left text-white shadow-lg shadow-emerald-500/25 transition active:scale-[0.99]"
           >
-            <span aria-hidden>📋</span>
-            기본 목록
-            <span className="text-[9.5px] font-bold text-indigo-400">
-              {fillingDefaults ? '넣는 중…' : '이 날 한 번에 넣기'}
+            <span aria-hidden className="text-[16px]">🛒</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11.5px] font-extrabold">포인트 상점</span>
+              <span className="block text-[9px] font-bold text-white/75">모은 P 로 물건을 사요</span>
+            </span>
+            <span data-testid="child-points-chip" className="shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-extrabold tabular-nums">
+              {pointsFor(study.db.tasks, currentMember.id)}P
             </span>
           </button>
         ) : null}
@@ -825,19 +792,10 @@ export default function App() {
             type="button"
             data-testid="open-copy-day"
             onClick={openCopyForDay}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-white py-2 text-[11px] font-extrabold text-slate-600 ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+            className="flex w-full items-center justify-center gap-1.5 rounded-2xl bg-white py-2 text-[11px] font-extrabold text-slate-600 ring-1 ring-slate-900/5 transition active:scale-[0.98]"
           >
             <CopyIcon className="h-3.5 w-3.5 text-indigo-500" />
             이 날 공부 복사
-          </button>
-          <button
-            type="button"
-            data-testid="copy-yesterday"
-            onClick={handleCopyYesterday}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-2xl bg-white py-2 text-[11px] font-extrabold text-slate-600 ring-1 ring-slate-900/5 transition active:scale-[0.98]"
-          >
-            <UndoIcon className="h-3.5 w-3.5 text-slate-400" />
-            어제 것 가져오기
           </button>
         </div>
 
@@ -1001,6 +959,7 @@ export default function App() {
         <OptionsPage onClose={() => setOptionsOpen(false)} onNotify={notify} />
       ) : null}
       {isParent && timerOpen ? <TimerPanel onClose={() => setTimerOpen(false)} onNotify={notify} /> : null}
+      {shopOpen ? <ShopPage onClose={() => setShopOpen(false)} onNotify={notify} /> : null}
 
       {/* 📱 뒤로가기 — 메인 화면에서만 「앱을 종료하시겠습니까?」 */}
       {exitOpen ? <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={confirmExit} /> : null}

@@ -48,6 +48,9 @@ import { StorageSetupError, createSupabaseAdapter, type NotesRemoteEvent } from 
 import { koreaTodayISO } from './date';
 import {
   addTimeUsage,
+  boxIsPointsPrize,
+  boxRewardFor,
+  burstActiveToday,
   loadLocalAppSettings,
   normalizeAppSettings,
   remainingBonusMinutes,
@@ -55,9 +58,11 @@ import {
   type AppSettings,
 } from './app-settings';
 import { unusedBonusMinutes } from './report';
+import { isShopTask, pointPrizeEventIds, prizeTaskInput } from './shop';
 import {
   computePastSeason,
   computeSeasonStats,
+  isXpHiddenTask,
   previousSeason,
   seasonOf,
   type SeasonStats,
@@ -135,13 +140,20 @@ export interface StudyContextValue {
   openReward: (eventId: string) => Promise<ActionResult>;
   useReward: (eventId: string) => Promise<ActionResult>;
   saveRewardSettings: (patch: Partial<RewardSettings>) => Promise<ActionResult>;
+  /** 💬 쪼꼬 명의로 한마디 남기기 — 100% 달성 축하처럼 앱이 스스로 쓰는 글 */
+  postJjokkoNote: (content: string, dateIso: string, id: string) => Promise<ActionResult>;
   /** ⚙️ 부모 옵션 — 기본 공부 목록 · 🔥 버스트 타임 · ⑤ 연속 보너스 · 타이머 기록 */
   appSettings: AppSettings;
   /** 'cloud' = 가족 폰이 함께 씀 / 'local' = 이 기기에만(SQL 실행 전) */
   settingsSync: 'cloud' | 'local';
   saveAppSettings: (patch: Partial<AppSettings>) => Promise<ActionResult & { localOnly?: boolean }>;
-  /** ② 뽑기로 받은 시간에서 분을 차감하고 타이머를 시작할 때 (부모 전용) */
-  consumeBonusTime: (memberId: string, minutes: number) => Promise<ActionResult>;
+  /** ② 뽑기로 받은 시간에서 분을 차감할 때 (부모 전용) — mode 'timer' 는 타이머 시작, 'direct' 는 바로 차감 */
+  consumeBonusTime: (
+    memberId: string,
+    minutes: number,
+    mode?: 'timer' | 'direct',
+    reason?: string,
+  ) => Promise<ActionResult>;
   /** XP 계산 규칙(버스트 타임·연속 보너스) */
   xpRules: XpRules;
   /** 🔥 버스트 타임이 지금 켜져 있는지 */
@@ -446,6 +458,60 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     [cloud],
   );
 
+  /**
+   * 🐣 쪼꼬 명의로 한마디 남기기 — 100% 달성 축하처럼 앱이 스스로 쓰는 글.
+   * id 를 정해 두어(날짜·아이) 여러 폰·여러 번 실행에도 같은 날 한 번만 올라갑니다.
+   */
+  const postJjokkoNote = useCallback(
+    async (content: string, _dateIso: string, id: string): Promise<ActionResult> => {
+      const text = content.trim();
+      if (!text) return { ok: false, error: '남길 말이 없어요.' };
+      if (notesRef.current.some((note) => note.id === id)) return { ok: true };
+
+      const current = dbRef.current;
+      const actor =
+        current.members.find((member) => member.id === currentMemberIdRef.current) ?? current.members[0];
+      if (!actor) return { ok: false, error: '가족 정보를 불러오지 못했어요.' };
+      // 쪼꼬 글도 DB 에는 부모 id 로 들어갑니다 — 그래야 아이 폰까지 알림이 갑니다.
+      const author = actor.role === 'parent' ? actor : current.members.find((member) => member.role === 'parent') ?? actor;
+
+      const note: FamilyNote = {
+        id,
+        family_id: author.family_id,
+        author_id: author.id,
+        author_kind: 'jjokko',
+        content: text,
+        created_at: new Date().toISOString(),
+      };
+      const optimistic = sortNotes([note, ...notesRef.current]);
+      notesRef.current = optimistic;
+      setNotes(optimistic);
+
+      if (!cloud || modeRef.current !== 'supabase') {
+        saveLocalNotes(optimistic);
+        return { ok: true };
+      }
+
+      try {
+        const saved = await cloud.addJjokkoNote(author.id, text, id);
+        const merged = sortNotes([
+          saved,
+          ...notesRef.current.filter((item) => item.id !== saved.id && item.id !== id),
+        ]);
+        notesRef.current = merged;
+        setNotes(merged);
+        saveLocalNotes(merged);
+        return { ok: true };
+      } catch (error) {
+        // 다른 폰이 먼저 같은 글을 남겼을 수 있습니다. 화면에는 그대로 두고 조용히 넘어갑니다.
+        console.warn('[study-check] 쪼꼬 한마디 저장 실패', error);
+        saveLocalNotes(notesRef.current);
+        return { ok: false, error: messageOf(error) };
+      }
+    },
+    [cloud],
+  );
+
   /** 🔔 백그라운드 알림 켜기 — 앱을 닫아 둬도 새 한마디가 폰 알림으로 오게 합니다. */
   const enablePush = useCallback(async (): Promise<ActionResult> => {
     const current = dbRef.current;
@@ -503,9 +569,35 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     saveLocalAppSettings(next);
   }, []);
 
+  /** addTask 는 아래에서 만들어지므로, 상자 정산(openReward)이 나중에 부를 수 있게 참조만 둡니다. */
+  const addTaskRef = useRef<((input: NewTaskInput) => Promise<ActionResult>) | null>(null);
+  const settledPrizeRef = useRef<Set<string>>(new Set());
+
+  /**
+   * 🎁 상자를 열 때 그 상자의 보상을 '그 순간' 확정합니다.
+   * 포인트(P) 보상이면 포인트 장부에 한 줄 남기고, 분 보상이면 아무것도 하지 않습니다(시간은 box_minutes 로).
+   * 나중에 보상 목록을 고쳐도 이미 연 상자의 보상은 바뀌지 않습니다.
+   */
+  const settleBoxPrize = useCallback((eventId: string, memberId: string, boxMinutes: number | null) => {
+    const rewards = appSettingsRef.current.boxRewards;
+    if (!boxIsPointsPrize(rewards, eventId)) return;
+    const id = `pt_prize_${eventId}`;
+    if (dbRef.current.tasks.some((task) => task.id === id)) return;
+    if (settledPrizeRef.current.has(id)) return;
+    settledPrizeRef.current.add(id);
+    const prize = boxRewardFor(rewards, eventId, boxMinutes);
+    void addTaskRef.current?.(prizeTaskInput(memberId, prize.value, '뽑기 상자 포인트', eventId));
+  }, []);
+
   const xpRules = useMemo<XpRules>(
-    () => ({ burstWindows: appSettings.burstWindows, streakBonuses: appSettings.streakBonuses }),
-    [appSettings.burstWindows, appSettings.streakBonuses],
+    () => ({
+      burstWindows: appSettings.burstWindows,
+      streakBonuses: appSettings.streakBonuses,
+      // 자동 버스트 타임이 꺼져 있으면 0 — '자동 없음'으로 셈합니다.
+      burstAutoDays: appSettings.burstAuto ? appSettings.burstAutoDays : 0,
+      burstOverlap: appSettings.burstOverlap,
+    }),
+    [appSettings.burstWindows, appSettings.streakBonuses, appSettings.burstAuto, appSettings.burstAutoDays, appSettings.burstOverlap],
   );
 
   const applyTierEvents = useCallback(
@@ -659,9 +751,14 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     [applyAppSettings, cloud],
   );
 
-  /** ② 뽑기로 받은 시간에서 분을 나눠 씁니다(부모 전용). */
+  /** ② 뽑기로 받은 시간에서 분을 나눠 씁니다(부모 전용) — 타이머로 쓸 수도, 바로 차감할 수도 있습니다. */
   const consumeBonusTime = useCallback(
-    async (memberId: string, minutes: number): Promise<ActionResult> => {
+    async (
+      memberId: string,
+      minutes: number,
+      mode: 'timer' | 'direct' = 'timer',
+      reason?: string,
+    ): Promise<ActionResult> => {
       const db = dbRef.current;
       const actor =
         db.members.find((member) => member.id === currentMemberIdRef.current) ?? db.members[0];
@@ -674,13 +771,13 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       const remaining = remainingBonusMinutes(
         appSettingsRef.current,
         memberId,
-        unusedBonusMinutes(tierEventsRef.current, memberId),
+        unusedBonusMinutes(tierEventsRef.current, memberId, pointPrizeEventIds(dbRef.current.tasks)),
       );
       if (wanted > remaining) {
         return { ok: false, error: `뽑기로 받은 남은 시간은 ${remaining}분이에요.` };
       }
 
-      const next = addTimeUsage(appSettingsRef.current, memberId, wanted);
+      const next = addTimeUsage(appSettingsRef.current, memberId, wanted, mode, reason);
       return saveAppSettings({ timeUsage: next.timeUsage });
     },
     [saveAppSettings],
@@ -815,6 +912,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
             opened_at: openedAt,
           });
         }
+        settleBoxPrize(eventId, target.member_id, target.box_minutes);
         return { ok: true };
       }
 
@@ -831,13 +929,14 @@ export function StudyProvider({ children }: { children: ReactNode }) {
             opened_at: saved.opened_at ?? openedAt,
           });
         }
+        settleBoxPrize(saved.id, saved.member_id, saved.box_minutes);
         return { ok: true };
       } catch (error) {
         applyTierEvents(before);
         return { ok: false, error: messageOf(error) };
       }
     },
-    [applyTierEvents, cloud],
+    [applyTierEvents, cloud, settleBoxPrize],
   );
 
   /** ✅ 보상 사용 완료 — 부모(PIN 인증) 만. */
@@ -1149,6 +1248,9 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     [run],
   );
 
+  // 상자 정산이 addTask 를 부를 수 있게 연결해 둡니다(렌더 때마다 최신 함수).
+  addTaskRef.current = addTask;
+
   const resetDemo = useCallback(async (): Promise<ActionResult> => {
     if (modeRef.current === 'supabase') {
       return { ok: false, error: '가족끼리 연결되어 있어 여기서 초기화할 수는 없어요.' };
@@ -1311,6 +1413,32 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     [cloud, local],
   );
 
+  /* ---------------------------------------------------------------- */
+  /* 🎉 당일 100% 달성 → 🐣 쪼꼬 축하 한마디 (하루·아이당 한 번)            */
+  /* ---------------------------------------------------------------- */
+
+  const congratsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (notesState !== 'ready') return;
+    if (cloud && syncState !== 'synced') return;
+    const today = koreaTodayISO();
+
+    for (const child of db.members) {
+      if (child.role !== 'child') continue;
+      // 당일분만 봅니다 — 지난 날짜 이월분은 세지 않고, 부모 전화·상점 장부도 뺍니다.
+      const todayTasks = db.tasks.filter(
+        (task) => task.member_id === child.id && task.due_date === today && !isXpHiddenTask(task),
+      );
+      if (todayTasks.length === 0) continue;
+      if (!todayTasks.every((task) => task.status === 'verified')) continue;
+
+      const id = `n_${today}_congrats_${child.id}`;
+      if (congratsRef.current.has(id) || notesRef.current.some((note) => note.id === id)) continue;
+      congratsRef.current.add(id);
+      void postJjokkoNote(`${child.name}, 오늘 공부 100% 완료 축하해요! 짝짝짝 👏`, today, id);
+    }
+  }, [db, notesState, syncState, cloud, postJjokkoNote]);
+
   const currentMember = db.members.find((member) => member.id === currentMemberId) ?? db.members[0];
 
   /** 아직 확인하지 않은 새 한마디 — 다른 사람이 남긴 것만 알립니다. */
@@ -1321,7 +1449,11 @@ export function StudyProvider({ children }: { children: ReactNode }) {
 
   const tasksFor = useCallback(
     (memberId: string, dateIso: string) =>
-      sortTasks(db.tasks.filter((task) => task.member_id === memberId && task.due_date === dateIso)),
+      sortTasks(
+        db.tasks.filter(
+          (task) => task.member_id === memberId && task.due_date === dateIso && !isShopTask(task),
+        ),
+      ),
     [db],
   );
 
@@ -1349,6 +1481,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       markNotesSeen,
       addNote,
       deleteNote,
+      postJjokkoNote,
       enablePush,
       seasonStatsFor,
       lastSeasonFor,
@@ -1364,7 +1497,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       saveAppSettings,
       consumeBonusTime,
       xpRules,
-      burstActive: appSettings.burst,
+      burstActive: burstActiveToday(appSettings, koreaTodayISO()),
       parentUnlocked: sessionPin !== null,
       parentPinSetupRequired: mode === 'local' && !localPinReady && syncState !== 'syncing',
       unlockParent,
@@ -1393,6 +1526,7 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     markNotesSeen,
     addNote,
     deleteNote,
+    postJjokkoNote,
     enablePush,
     seasonStatsFor,
     lastSeasonFor,

@@ -1,4 +1,5 @@
 import { burstMultiplierAt, streakBonusXp, type BurstWindow, type StreakBonus } from './app-settings';
+import { isShopTask } from './shop';
 import { addDays, daysBetweenISO, fromISODate, holidayName, koreaISODateOf, koreaTodayISO, toISODate } from './date';
 import type { Task, TaskStatus } from './types';
 
@@ -39,6 +40,10 @@ export const STREAK_BONUS_FROM = 3;
 export interface XpRules {
   burstWindows?: BurstWindow[];
   streakBonuses?: StreakBonus[];
+  /** 🔥 자동 버스트 타임 — 월말 며칠 전부터(0 이면 자동 없음) */
+  burstAutoDays?: number;
+  /** 수동·자동이 겹칠 때 4배까지 (끄면 2배 한 번) */
+  burstOverlap?: boolean;
 }
 
 /**
@@ -127,7 +132,10 @@ export function xpForTask(
     task.status === 'verified'
       ? task.verified_at ?? task.updated_at ?? `${task.due_date}T23:59:59`
       : new Date().toISOString();
-  const multiplier = burstMultiplierAt(completedIso, rules?.burstWindows ?? []);
+  const multiplier = burstMultiplierAt(completedIso, rules?.burstWindows ?? [], {
+    autoDays: rules?.burstAutoDays ?? 0,
+    overlap: rules?.burstOverlap ?? false,
+  });
   return {
     delayDays,
     percent,
@@ -140,8 +148,12 @@ export function xpForTask(
 }
 
 
-/** 아이 화면에서 숨기는 부모 전화 항목 — XP 에도 넣지 않습니다(App.tsx 의 isCallTask 와 같은 규칙). */
+/**
+ * XP·통계에서 빼는 항목 — 부모 전화 항목과 상점 장부(상품·포인트)입니다.
+ * (상점 줄은 날짜가 2000-01-01 이라 어차피 어느 달에도 안 들어가지만, 한 번 더 막아 둡니다)
+ */
 export function isXpHiddenTask(task: Task): boolean {
+  if (isShopTask(task)) return true;
   return task.title.includes('📞 통화') || task.id.includes('_call1') || task.id.includes('_call2');
 }
 

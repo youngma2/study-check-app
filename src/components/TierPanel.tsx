@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { reachedStreakBonus, nextStreakBonus } from '../lib/app-settings';
+import { boxRewardFor, reachedStreakBonus, nextStreakBonus } from '../lib/app-settings';
+import { boxPointPrize } from '../lib/shop';
 import { cx } from '../lib/cx';
 import { formatShortDate, toISODate } from '../lib/date';
 import type { TierEvent } from '../lib/rewards';
@@ -217,7 +218,15 @@ function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => 
   const study = useStudy();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const minutes = event.box_minutes ?? 0;
+  const prize = (() => {
+    if (event.opened_at) {
+      const frozen = boxPointPrize(study.db.tasks, event.id);
+      if (frozen !== null) return { kind: 'points' as const, value: frozen };
+      return { kind: 'minutes' as const, value: event.box_minutes ?? 0 };
+    }
+    return boxRewardFor(study.appSettings.boxRewards, event.id, event.box_minutes);
+  })();
+  const unit = prize.kind === 'points' ? 'P' : '분';
   const opened = event.opened_at !== null;
   const tierLabel = `${TIER_LABEL[event.tier]}${event.division >= 1 && event.division <= 3 ? ` ${DIVISIONS[event.division]}` : ''}`;
 
@@ -246,9 +255,18 @@ function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => 
 
       {opened ? (
         <div className="animate-reward-pop">
-          <p className="mt-0.5 text-[15px] font-extrabold leading-none text-amber-600">+{minutes}분</p>
-          <p className="mt-0.5 text-[8.5px] font-bold text-amber-500/90">게임 시간</p>
-          {event.used_at ? (
+          <p className="mt-0.5 text-[15px] font-extrabold leading-none text-amber-600">
+            +{prize.value}
+            {unit}
+          </p>
+          <p className="mt-0.5 text-[8.5px] font-bold text-amber-500/90">
+            {prize.kind === 'points' ? '화폐 포인트' : '게임 시간'}
+          </p>
+          {prize.kind === 'points' ? (
+            <p className="mt-1 rounded-full bg-emerald-50 py-0.5 text-[8.5px] font-extrabold text-emerald-600 ring-1 ring-emerald-200/70">
+              포인트로 지급
+            </p>
+          ) : event.used_at ? (
             <p className="mt-1 rounded-full bg-emerald-50 py-0.5 text-[8.5px] font-extrabold text-emerald-600 ring-1 ring-emerald-200/70">
               사용 완료
             </p>

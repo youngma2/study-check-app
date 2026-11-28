@@ -68,6 +68,7 @@ export function DemoStudyProvider({
       markNotesSeen: () => {},
       addNote: ok,
       deleteNote: ok,
+      postJjokkoNote: ok,
       enablePush: ok,
       seasonStatsFor: () => undefined,
       lastSeasonFor: () => null,

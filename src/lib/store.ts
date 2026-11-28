@@ -234,7 +234,7 @@ export function addTask(db: StudyDB, actor: Member, input: NewTaskInput): StudyD
   }
 
   const task: Task = {
-    id: newTaskId(),
+    id: input.id?.trim() || newTaskId(),
     family_id: actor.family_id,
     member_id: target.id,
     title,

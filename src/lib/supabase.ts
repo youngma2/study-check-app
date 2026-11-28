@@ -348,6 +348,21 @@ export class SupabaseStorageAdapter implements StorageAdapter {
     return toNote(data as FamilyNoteRow);
   }
 
+  /**
+   * 🐣 쪼꼬 명의로 한마디 남기기 — 100% 달성 축하처럼 앱이 스스로 남기는 글.
+   * 서버 함수(study_add_jjokko_note)가 화면 표시를 '쪼꼬' 로 바꿔 두고, 알림은 가족 폰으로 갑니다.
+   */
+  async addJjokkoNote(actorId: string, content: string, id: string): Promise<FamilyNote> {
+    const { data, error } = await this.client.rpc('study_add_jjokko_note', {
+      p_actor_id: actorId,
+      p_content: content,
+      p_id: id,
+    });
+    if (error) throw toUserError(error);
+    if (!data) throw new Error('한마디를 남기지 못했어요.');
+    return toNote(data as FamilyNoteRow);
+  }
+
   /** 한마디 지우기 — 내가 쓴 글, 또는 부모가 PIN 을 넣고 남의 글. (서버가 한 번 더 확인합니다) */
   async deleteNote(actorId: string, noteId: string, pin?: string | null): Promise<void> {
     const { error } = await this.client.rpc('study_delete_note', {
