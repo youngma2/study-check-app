@@ -55,6 +55,7 @@ function useReports(period: Period) {
           period,
           today,
           pointPrizeEventIds(study.db.tasks),
+          study.appSettings.timeGrants,
         ),
         unusedAll: remainingBonusMinutes(
           study.appSettings,
@@ -356,7 +357,8 @@ function ChildReportCard({
           {report.rewards.lines.map((line) => (
             <li key={line.id} className="flex items-center justify-between gap-2 text-[9px] font-bold text-slate-400">
               <span className="truncate">
-                {Number(line.date.slice(5, 7))}/{Number(line.date.slice(8, 10))} 뽑기 · +{line.minutes}분
+                {Number(line.date.slice(5, 7))}/{Number(line.date.slice(8, 10))}{' '}
+                {line.kind === 'grant' ? '시간 추가' : '뽑기'} · +{line.minutes}분
               </span>
               <span className={cx('shrink-0 font-extrabold', line.used ? 'text-emerald-500' : 'text-amber-500')}>
                 {line.used ? '적립 완료' : '남음'}

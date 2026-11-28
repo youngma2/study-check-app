@@ -40,6 +40,8 @@ export interface RewardLine {
   tier: TierKey;
   division: number;
   used: boolean;
+  /** 'box' = 뽑기 상자에서 나온 시간 / 'grant' = 부모가 직접 더해 준 시간 (4차 8번) */
+  kind?: 'box' | 'grant';
 }
 
 export interface MemberReport {
@@ -139,6 +141,8 @@ export function computeMemberReport(
   todayIso: string = koreaTodayISO(),
   /** 포인트(P)로 정산된 상자 id — 그 상자의 시간은 '게임 시간' 집계에서 뺍니다 */
   pointPrizeIds: Set<string> = new Set(),
+  /** 부모가 직접 더해 준 시간(4차 8번) — 뽑기 상자와 함께 '받음' 에 셉니다 */
+  timeGrants: Array<{ id: string; member_id: string; minutes: number; at: string; reason?: string }> = [],
 ): MemberReport {
   const counts = dayCounts(tasks, memberId);
   const days: DayReport[] = [];
@@ -184,10 +188,28 @@ export function computeMemberReport(
         tier: event.tier,
         division: event.division,
         used: event.used_at !== null,
+        kind: 'box' as const,
       };
     })
-    .filter((line) => line.date >= period.start && line.date <= period.end)
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .filter((line) => line.date >= period.start && line.date <= period.end);
+
+  // 4차 8번 — 부모가 직접 더한 시간도 같은 내역에 '시간 추가' 로 넣습니다.
+  for (const grant of timeGrants) {
+    if (grant.member_id !== memberId) continue;
+    const date = toISODate(new Date(grant.at));
+    if (date < period.start || date > period.end) continue;
+    lines.push({
+      id: `grant_${grant.id}`,
+      date,
+      minutes: grant.minutes,
+      tier: 'bronze' as TierKey,
+      division: 0,
+      used: false,
+      kind: 'grant' as const,
+    });
+  }
+
+  lines.sort((a, b) => a.date.localeCompare(b.date));
 
   const received = lines.reduce((sum, line) => sum + line.minutes, 0);
   const used = lines.reduce((sum, line) => sum + (line.used ? line.minutes : 0), 0);
@@ -334,7 +356,10 @@ export function buildExportText({ period, rows }: ExportInput): string {
       `  보너스 게임 시간: 받음 ${report.rewards.received}분 · 사용 ${report.rewards.used}분 · 남음 ${report.rewards.remaining}분 (전체 미사용 ${row.unusedAll}분)`,
     );
     for (const line of report.rewards.lines) {
-      const tierText = `${TIER_TEXT[line.tier]}${line.division >= 1 && line.division <= 3 ? ` ${DIVISIONS[line.division]}` : ''}`;
+      const tierText =
+        line.kind === 'grant'
+          ? '시간 추가'
+          : `${TIER_TEXT[line.tier]}${line.division >= 1 && line.division <= 3 ? ` ${DIVISIONS[line.division]}` : ''}`;
       lines.push(`    · ${dayLabel(line.date)} ${tierText} +${line.minutes}분 ${line.used ? '(사용)' : '(남음)'}`);
     }
 

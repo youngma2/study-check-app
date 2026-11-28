@@ -448,6 +448,9 @@ def main() -> None:
                 if box['height'] > 18:
                     single_line = False
             check('6 달성률 텍스트가 한 줄(줄바꿈 없음)', single_line and no_wrap, f'nowrap={no_wrap} single={single_line}')
+            dash_text = page.inner_text('[data-testid="parent-dashboard"]')
+            check('8 대시보드 보너스 시간 내역에도 `시간 추가 +20분`', '시간 추가' in dash_text and '+20분' in dash_text,
+                  dash_text[:0])
             page.screenshot(path=str(SHOTS / '04-dashboard.png'), full_page=True)
             page.get_by_test_id('dashboard-close').click()
             page.wait_for_timeout(400)
