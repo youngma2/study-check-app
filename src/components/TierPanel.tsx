@@ -79,7 +79,9 @@ export function TierPanel({ member }: { member: Member }) {
               />
             </span>
             <span className="shrink-0 text-[9px] font-bold tabular-nums text-slate-400">
-              {level.nextXp === null ? '최고 티어' : `${levelForXp(level.nextXp).title}까지 ${formatXp(remaining)} XP`}
+              {level.nextXp === null
+                ? '최고 티어'
+                : `${levelForXp(level.nextXp, study.appSettings.tierDifficulty).title}까지 ${formatXp(remaining)} XP`}
             </span>
           </div>
 
@@ -264,11 +266,11 @@ function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => 
           </p>
           {prize.kind === 'points' ? (
             <p className="mt-1 rounded-full bg-emerald-50 py-0.5 text-[8.5px] font-extrabold text-emerald-600 ring-1 ring-emerald-200/70">
-              포인트로 지급
+              {study.isParent ? '적립 완료' : '정리 완료'}
             </p>
           ) : event.used_at ? (
             <p className="mt-1 rounded-full bg-emerald-50 py-0.5 text-[8.5px] font-extrabold text-emerald-600 ring-1 ring-emerald-200/70">
-              사용 완료
+              {study.isParent ? '적립 완료' : '정리 완료'}
             </p>
           ) : study.isParent ? (
             <button
@@ -281,7 +283,7 @@ function RewardBox({ event, onOpenGift }: { event: TierEvent; onOpenGift: () => 
               사용 완료
             </button>
           ) : (
-            <p className="mt-1 rounded-full bg-amber-100 py-0.5 text-[8.5px] font-extrabold text-amber-700">뽑음</p>
+            <p className="mt-1 rounded-full bg-amber-100 py-0.5 text-[8.5px] font-extrabold text-amber-700">정리 완료</p>
           )}
         </div>
       ) : (

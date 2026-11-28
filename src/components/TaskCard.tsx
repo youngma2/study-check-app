@@ -1,4 +1,5 @@
 import { cx } from '../lib/cx';
+import { needParentOf } from '../lib/approval';
 import { formatTimeKo, isFutureDate, koreaTodayISO } from '../lib/date';
 import { formatXp, isXpHiddenTask, XP_PER_TASK, xpForTask } from '../lib/season';
 import { useStudy } from '../lib/study-context';
@@ -18,17 +19,37 @@ interface TaskCardProps {
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
   onCopy: (task: Task) => void;
+  /** ✅ 부모 확인이 필요한 항목 — 아이는 '확인 요청', 부모는 '확인' */
+  onRequestCheck: (task: Task) => void;
+  onApprove: (task: Task) => void;
   /** 오늘 날짜 (한국 시간 기준 'YYYY-MM-DD') — 아직 안 온 날짜는 완료를 잠급니다. */
   today?: string;
 }
 
-export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, onEdit, onDelete, onCopy, today }: TaskCardProps) {
+export function TaskCard({
+  task,
+  canComplete,
+  canManage,
+  onComplete,
+  onRevert,
+  onEdit,
+  onDelete,
+  onCopy,
+  onRequestCheck,
+  onApprove,
+  today,
+}: TaskCardProps) {
   const subject = subjectMeta(task.subject);
   const study = useStudy();
   const verified = task.status === 'verified';
   /** 그날이 되기 전에는 완료 버튼을 잠깁니다. (오늘·지난 날짜는 그대로 완료) */
   const lockedUntilDue = !verified && isFutureDate(task.due_date, today);
   const pending = task.status === 'pending_verification';
+  /** ✅ 부모 확인이 필요한 항목 — 아이는 혼자 완료하지 못하고 확인을 요청합니다. */
+  const needParent = needParentOf(task);
+  const childWaiting = needParent && pending && !study.isParent;
+  const canRequest = needParent && canComplete && !study.isParent && !verified && !pending && !lockedUntilDue;
+  const canApprove = needParent && pending && study.isParent;
   const completedAt = verified ? formatTimeKo(task.verified_at) : null;
   const canCopy = canManage || canComplete;
   /** ⚖️ 완료 시점별 XP — 완료했으면 받은 XP, 아직이면 지금 완료하면 받을 XP */
@@ -113,7 +134,39 @@ export function TaskCard({ task, canComplete, canManage, onComplete, onRevert, o
             </span>
 
             <div className="flex shrink-0 items-center gap-1">
-              {!verified && canComplete ? (
+              {canApprove ? (
+                <button
+                  type="button"
+                  data-testid="approve-task"
+                  onClick={() => onApprove(task)}
+                  className="inline-flex h-7 items-center gap-1 rounded-full bg-emerald-600 px-2.5 text-[10.5px] font-extrabold text-white shadow-sm shadow-emerald-600/30 transition active:scale-95"
+                >
+                  <CheckIcon className="h-3 w-3" strokeWidth={3} />
+                  확인
+                </button>
+              ) : null}
+
+              {canRequest ? (
+                <button
+                  type="button"
+                  data-testid="request-check"
+                  onClick={() => onRequestCheck(task)}
+                  className="inline-flex h-7 items-center gap-1 rounded-full bg-amber-500 px-2.5 text-[10.5px] font-extrabold text-white shadow-sm shadow-amber-500/30 transition active:scale-95"
+                >
+                  🙋 확인 요청
+                </button>
+              ) : null}
+
+              {childWaiting ? (
+                <span
+                  data-testid="waiting-parent"
+                  className="inline-flex h-7 items-center gap-1 rounded-full bg-amber-50 px-2 text-[9.5px] font-extrabold text-amber-700 ring-1 ring-amber-200/80"
+                >
+                  부모 확인 대기
+                </span>
+              ) : null}
+
+              {!verified && canComplete && !canRequest && !childWaiting && !canApprove ? (
                 lockedUntilDue ? (
                   <button
                     type="button"

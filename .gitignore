@@ -11,3 +11,6 @@ dist-demo
 public/setup.html
 dist-no-legend
 scripts/shots-batch
+
+.tmp-b2/
+scripts/shots-batch2/

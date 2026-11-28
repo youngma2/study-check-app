@@ -44,6 +44,10 @@ export interface XpRules {
   burstAutoDays?: number;
   /** 수동·자동이 겹칠 때 4배까지 (끄면 2배 한 번) */
   burstOverlap?: boolean;
+  /** 자동 버스트 타임을 켠 날 — 이 날 이전에는 소급 적용하지 않습니다. */
+  burstAutoFrom?: string | null;
+  /** 🏆 티어 난이도(%) — 0 이 기본 기준 */
+  tierDifficulty?: number;
 }
 
 /**
@@ -135,6 +139,7 @@ export function xpForTask(
   const multiplier = burstMultiplierAt(completedIso, rules?.burstWindows ?? [], {
     autoDays: rules?.burstAutoDays ?? 0,
     overlap: rules?.burstOverlap ?? false,
+    autoFrom: rules?.burstAutoFrom ?? null,
   });
   return {
     delayDays,
@@ -171,13 +176,19 @@ export interface TierDef {
 }
 
 export const TIERS: TierDef[] = [
-  { key: 'bronze', label: '브론즈', emoji: '🥉', min: 0, max: 99, rank: 1 },
-  { key: 'silver', label: '실버', emoji: '🥈', min: 100, max: 249, rank: 2 },
-  { key: 'gold', label: '골드', emoji: '🥇', min: 250, max: 449, rank: 3 },
-  { key: 'platinum', label: '플래티넘', emoji: '💠', min: 450, max: 699, rank: 4 },
-  { key: 'diamond', label: '다이아', emoji: '💎', min: 700, max: 999, rank: 5 },
-  { key: 'master', label: '마스터', emoji: '👑', min: 1000, max: null, rank: 6 },
+  { key: 'bronze', label: '브론즈', emoji: '🥉', min: 0, max: 199, rank: 1 },
+  { key: 'silver', label: '실버', emoji: '🥈', min: 200, max: 449, rank: 2 },
+  { key: 'gold', label: '골드', emoji: '🥇', min: 450, max: 799, rank: 3 },
+  { key: 'platinum', label: '플래티넘', emoji: '💠', min: 800, max: 1199, rank: 4 },
+  { key: 'diamond', label: '다이아', emoji: '💎', min: 1200, max: 1599, rank: 5 },
+  { key: 'master', label: '마스터', emoji: '👑', min: 1600, max: null, rank: 6 },
 ];
+
+/** 🏆 난이도(%)를 반영한 티어 문턱값 — 0%가 기본이고, +5%면 마스터 1,680부터입니다. */
+export function tierThreshold(min: number, difficulty = 0): number {
+  const scale = Math.max(0.5, 1 + (Number.isFinite(difficulty) ? difficulty : 0) / 100);
+  return Math.round(min * scale);
+}
 
 /** 세부 단계 이름 — III(막 승급) → II → I(그 티어의 끝) */
 export const DIVISIONS = ['', 'I', 'II', 'III'] as const;
@@ -208,12 +219,13 @@ export interface TierLevel {
 
 const MASTER_LEVEL = TIERS.length * 3 - 2; // 16칸 중 마지막 = 15
 
-/** 칸 번호(0~15) → 티어·세부 단계 */
-export function levelOfIndex(index: number): TierLevel {
+/** 칸 번호(0~15) → 티어·세부 단계 (difficulty 는 % — 0 이 기본) */
+export function levelOfIndex(index: number, difficulty = 0): TierLevel {
   const clamped = Math.max(0, Math.min(MASTER_LEVEL, Math.floor(index)));
   const rank = Math.floor(clamped / 3) + 1;
   const tier = tierByRank(rank);
 
+  const min = tierThreshold(tier.min, difficulty);
   if (tier.max === null) {
     return {
       key: tier.key,
@@ -222,13 +234,14 @@ export function levelOfIndex(index: number): TierLevel {
       division: 0,
       index: MASTER_LEVEL,
       title: tier.label,
-      minXp: tier.min,
+      minXp: min,
       nextXp: null,
     };
   }
 
+  const max = tierThreshold(tier.max + 1, difficulty) - 1;
   const division = 3 - (clamped % 3);
-  const span = tier.max - tier.min + 1;
+  const span = Math.max(1, max - min + 1);
   const step = Math.ceil(span / 3);
   const pos = 3 - division;
   return {
@@ -238,24 +251,26 @@ export function levelOfIndex(index: number): TierLevel {
     division,
     index: clamped,
     title: `${tier.label} ${DIVISIONS[division]}`,
-    minXp: tier.min + pos * step,
-    nextXp: pos < 2 ? tier.min + (pos + 1) * step : tier.max + 1,
+    minXp: min + pos * step,
+    nextXp: pos < 2 ? min + (pos + 1) * step : max + 1,
   };
 }
 
 /** XP → 지금 칸 */
-export function levelForXp(xp: number): TierLevel {
+export function levelForXp(xp: number, difficulty = 0): TierLevel {
   const value = Math.max(0, Math.floor(xp || 0));
   for (const tier of TIERS) {
-    if (tier.max === null) return levelOfIndex(MASTER_LEVEL);
-    if (value <= tier.max) {
-      const span = tier.max - tier.min + 1;
+    if (tier.max === null) return levelOfIndex(MASTER_LEVEL, difficulty);
+    const min = tierThreshold(tier.min, difficulty);
+    const max = tierThreshold(tier.max + 1, difficulty) - 1;
+    if (value <= max) {
+      const span = Math.max(1, max - min + 1);
       const step = Math.ceil(span / 3);
-      const pos = Math.min(2, Math.max(0, Math.floor((value - tier.min) / step)));
-      return levelOfIndex((tier.rank - 1) * 3 + pos);
+      const pos = Math.min(2, Math.max(0, Math.floor((value - min) / step)));
+      return levelOfIndex((tier.rank - 1) * 3 + pos, difficulty);
     }
   }
-  return levelOfIndex(MASTER_LEVEL);
+  return levelOfIndex(MASTER_LEVEL, difficulty);
 }
 
 /* ------------------------------------------------------------------ */
@@ -371,7 +386,8 @@ function monthStats(tasks: Task[], memberId: string, window: MonthWindow, rules?
   for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) {
     const date = toISODate(cursor);
     const slot = byDate.get(date) ?? { total: 0, verified: 0, itemXp: 0, lateVerified: 0 };
-    const allClear = slot.total > 0 && slot.verified === slot.total;
+    // 100% 달성은 **그 날 실제로 체크한 항목만** 셉니다 (이월·지연 체크는 빠집니다).
+    const allClear = slot.total > 0 && slot.verified === slot.total && slot.lateVerified === 0;
     const streakDay = isStreakDay(date);
 
     verifiedTotal += slot.verified;
@@ -423,7 +439,7 @@ function monthStats(tasks: Task[], memberId: string, window: MonthWindow, rules?
     verified: verifiedTotal,
     lateVerified: lateTotal,
     allClearDays,
-    level: levelForXp(xp),
+    level: levelForXp(xp, rules?.tierDifficulty ?? 0),
     streak,
     todayAllClear,
     streakBonusXp: streakBonusTotal,
@@ -450,6 +466,54 @@ export function computePastSeason(
   rules?: XpRules,
 ): SeasonStats {
   return monthStats(tasks, memberId, { season, lastDate: seasonEnd(season), inProgressDate: null }, rules);
+}
+
+/** 최근 count 달의 'YYYY-MM' 목록 (지난달부터 — 이번 달은 진행 중이라 뺍니다) */
+export function recentSeasons(todayIso: string = koreaTodayISO(), count = 12): string[] {
+  const out: string[] = [];
+  let cursor = previousSeason(seasonOf(todayIso));
+  for (let index = 0; index < count; index += 1) {
+    out.push(cursor);
+    cursor = previousSeason(cursor);
+  }
+  return out;
+}
+
+export interface MonthSettlement {
+  season: string;
+  xp: number;
+  level: TierLevel;
+}
+
+/** 한 달 월말 결산의 최종 티어 — 이미 남긴 결산 기록이 있으면 그것을 그대로 씁니다. */
+export function settlementOf(
+  tasks: Task[],
+  memberId: string,
+  season: string,
+  _todayIso: string,
+  rules?: XpRules,
+  frozen?: { xp: number; title: string; tier?: string; division?: number; level: number } | null,
+): MonthSettlement {
+  if (frozen) {
+    // 이미 남긴 결산은 그때의 이름·단계를 그대로 보여 줍니다(난이도 변경 소급 없음).
+    const tier = tierByKey(frozen.tier ?? '') ?? tierByRank(Math.min(6, Math.floor(frozen.level / 3) + 1));
+    return {
+      season,
+      xp: frozen.xp,
+      level: {
+        key: tier.key,
+        label: tier.label,
+        rank: tier.rank,
+        division: frozen.division ?? (tier.max === null ? 0 : 3 - (frozen.level % 3)),
+        index: frozen.level,
+        title: frozen.title,
+        minXp: tierThreshold(tier.min, rules?.tierDifficulty ?? 0),
+        nextXp: null,
+      },
+    };
+  }
+  const stats = computePastSeason(tasks, memberId, season, rules);
+  return { season, xp: stats.xp, level: stats.level };
 }
 
 /** 그 시즌(달력 한 달)의 XP — 이번 달이면 오늘까지, 지난 달이면 그 달 끝까지. */

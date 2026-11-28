@@ -40,19 +40,22 @@ import { XIcon } from './icons';
  * 어느 상자를 골라도 그 값이 당첨이 됩니다(서버·기기 모두 같은 값 — 새로고침해도 그대로).
  */
 
-/** 당첨 값 외에 나머지 두 상자에 보여 줄 보상 — 보상 목록에서 서로 다른 것 두 개 */
-function pickOtherRewards(rewards: BoxReward[], won: BoxReward): BoxReward[] {
+/** 당첨 값 외에 나머지 상자에 보여 줄 보상 — 보상 목록에서 서로 다른 것 count 개 */
+function pickOtherRewards(rewards: BoxReward[], won: BoxReward, count: number): BoxReward[] {
   const list = rewards.length > 0 ? rewards : DEFAULT_BOX_REWARDS;
   const pool = [...list];
   const picked: BoxReward[] = [];
-  while (picked.length < 2 && pool.length > 0) {
+  let guard = 0;
+  while (picked.length < count && guard < 40) {
+    guard += 1;
+    if (pool.length === 0) pool.push(...list);
     const index = Math.floor(Math.random() * pool.length);
     const [item] = pool.splice(index, 1);
-    // 같은 분·P 값이 이미 보여 준 것과 같으면 건너뜁니다(다르면 다른 값도 섞어 보여 줍니다).
+    // 같은 분·P 값이 이미 보여 준 것과 같으면 건너뜁니다(다른 값도 섞어 보여 줍니다).
     if (item.kind === won.kind && item.value === won.value) continue;
     picked.push(item);
   }
-  while (picked.length < 2) picked.push(won);
+  while (picked.length < count) picked.push(won);
   return picked;
 }
 
@@ -92,6 +95,8 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
         ? { kind: 'minutes', value: event.box_minutes ?? 0 }
         : boxRewardFor(study.appSettings.boxRewards, event.id, event.box_minutes);
   const wonReward: BoxReward = { id: 'won', kind: won.kind, value: won.value };
+  /** ⑦ 옵션에서 고른 선물 상자 개수 (1~5) — 비어 있는 상자는 보상 목록에서 무작위로 채웁니다. */
+  const boxCount = Math.max(1, Math.min(5, Math.round(study.appSettings.boxCount || 3)));
   const isPoints = won.kind === 'points';
   const unit = isPoints ? 'P' : '분';
   const tierLabel = `${TIER_LABEL[event.tier]}${
@@ -142,8 +147,8 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
     setStage('opening');
     setError(null);
 
-    const otherList = pickOtherRewards(study.appSettings.boxRewards, wonReward).map(rewardLabel);
-    setOthers(Math.random() < 0.5 ? otherList : [otherList[1], otherList[0]]);
+    const otherList = pickOtherRewards(study.appSettings.boxRewards, wonReward, boxCount - 1).map(rewardLabel);
+    setOthers(otherList);
 
     // 두근두근 — 흔들림·심장 소리·짧은 진동
     later(100, () => {
@@ -206,7 +211,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
 
   const othersText =
     others && picked !== null
-      ? `다른 상자엔 ${others[0]}, ${others[1]}가 있었어요!`
+      ? `다른 상자엔 ${others.join(', ')}가 있었어요!`
       : '';
 
   return (
@@ -260,7 +265,11 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
               🎁 {memberName} · {dateLabel} {tierLabel} 승급
             </p>
             <h2 className="mt-0.5 text-[16px] font-extrabold tracking-tight text-slate-900">
-              {stage === 'choose' ? '상자 3개 중 하나를 골라!' : stage === 'opening' ? '두근두근…' : '짜잔!'}
+              {stage === 'choose'
+                ? `선물 상자 ${boxCount}개 중 하나를 골라!`
+                : stage === 'opening'
+                  ? '두근두근…'
+                  : '짜잔!'}
             </h2>
           </div>
           <div className="flex shrink-0 items-center gap-1">
@@ -290,8 +299,11 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          {[0, 1, 2].map((index) => {
+        <div
+          className="mt-3 grid gap-2"
+          style={{ gridTemplateColumns: `repeat(${boxCount}, minmax(0, 1fr))` }}
+        >
+          {Array.from({ length: boxCount }, (_, index) => {
             const isPicked = picked === index;
             const isOpen = stage === 'revealed';
             const otherIndex = picked === null ? 0 : index < picked ? index : index - 1;
@@ -304,7 +316,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
                 onClick={() => choose(index)}
                 disabled={stage !== 'choose'}
                 aria-label={
-                  isPicked && isOpen ? `고른 상자 — ${rewardLabel(wonReward)}` : `상자 ${index + 1} 고르기`
+                  isPicked && isOpen ? `고른 상자 — ${rewardLabel(wonReward)}` : `선물 상자 ${index + 1} 고르기`
                 }
                 className={cx(
                   'relative flex aspect-[4/5] flex-col items-center justify-center rounded-2xl text-center ring-1 transition',
@@ -344,7 +356,7 @@ export function RewardGiftModal({ event, memberName, onClose, onNotify }: Reward
                       🎁
                     </span>
                     <span className="mt-1 block text-[9.5px] font-extrabold text-violet-500">
-                      {isPicked && stage === 'opening' ? '여는 중…' : `상자 ${index + 1}`}
+                      {isPicked && stage === 'opening' ? '여는 중…' : `${index + 1}번`}
                     </span>
                   </>
                 )}

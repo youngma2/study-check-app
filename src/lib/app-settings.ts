@@ -17,7 +17,7 @@ import type { TaskPreset } from './types';
 export type RoutineKey = 'semester' | 'vacation' | 'exam';
 
 export const ROUTINE_PRESETS: Array<{ key: RoutineKey; label: string; emoji: string }> = [
-  { key: 'semester', label: '학기중', emoji: '📚' },
+  { key: 'semester', label: '학기중(평일)', emoji: '📚' },
   { key: 'vacation', label: '방학', emoji: '🏖️' },
   { key: 'exam', label: '시험기간', emoji: '📝' },
 ];
@@ -68,14 +68,41 @@ export const DEFAULT_BOX_REWARDS: BoxReward[] = [
   { id: 'bx_min_20', kind: 'minutes', value: 20 },
 ];
 
-/** '0'(일) ~ '6'(토) → 그 요일의 기본 공부 목록 */
+/** '0'(일) ~ '6'(토) → 그 요일의 기본 공부 목록 (예전 저장 모양 — 읽을 때만 씁니다) */
 export type WeekdayRoutine = Record<string, TaskPreset[]>;
-/** memberId → 요일별 목록 */
+/** memberId → 요일별 목록 (예전 저장 모양) */
 export type MemberRoutines = Record<string, WeekdayRoutine>;
+
+/**
+ * 📚 프리셋의 기본 공부 항목 한 줄.
+ * · days — 이 항목을 하는 요일(0=일 … 6=토). 화면에서 체크박스로 켜고 끕니다.
+ * · order — 목록 순서(작을수록 위). 위·아래 버튼으로 바꿉니다.
+ * · needParent — 부모(관리자) 확인이 필요한 항목(예: 독서록 아빠 검사).
+ */
+export interface RoutineItem {
+  id: string;
+  title: string;
+  subject: string;
+  days: number[];
+  order: number;
+  needParent?: boolean;
+}
 
 export interface RoutineSet {
   label: string;
-  routines: MemberRoutines;
+  /** memberId → 그 아이의 기본 항목 목록 */
+  items: Record<string, RoutineItem[]>;
+}
+
+/** 📅 월말 결산 기록 한 줄 — 그 달 마지막 최종 티어와 XP */
+export interface Settlement {
+  season: string;
+  xp: number;
+  title: string;
+  tier: string;
+  division: number;
+  level: number;
+  frozen_at: string;
 }
 
 export interface AppSettings {
@@ -100,6 +127,16 @@ export interface AppSettings {
   presets: Record<RoutineKey, RoutineSet>;
   /** ② 뽑기 시간을 나눠 쓴 기록 */
   timeUsage: TimeUsage[];
+  /** 🎁 선물 상자 개수 (1 ~ 5) — 상자를 열 때 이만큼 보여 줍니다. */
+  boxCount: number;
+  /** 🏆 티어 난이도(%) — 0 이 기본 기준, 값이 클수록 승급이 어려워집니다. */
+  tierDifficulty: number;
+  /** 🔥 자동 버스트 타임을 켠 날('YYYY-MM-DD') — 이 날 이전에는 소급 적용하지 않습니다. */
+  burstAutoFrom: string | null;
+  /** 🖼 아이 프로필 아이콘 바꾸기 (memberId → 이모지) */
+  profileEmoji: Record<string, string>;
+  /** 📅 월말 결산에 남긴 지난달 기록 (memberId → season → 결산) */
+  settlements: Record<string, Record<string, Settlement>>;
 }
 
 export const DEFAULT_STREAK_BONUSES: StreakBonus[] = [
@@ -111,11 +148,14 @@ export const DEFAULT_STREAK_BONUSES: StreakBonus[] = [
 
 export const LOCAL_APP_SETTINGS_KEY = 'study-check.app-settings.v1';
 
+/** 티어 난이도 버튼 — 기본(0%)이 기준이고 처음에는 +5% 로 시작합니다. */
+export const TIER_DIFFICULTY_OPTIONS = [-10, -5, 0, 5, 10, 15, 20] as const;
+
 function emptyRoutines(): Record<RoutineKey, RoutineSet> {
   return {
-    semester: { label: '학기중', routines: {} },
-    vacation: { label: '방학', routines: {} },
-    exam: { label: '시험기간', routines: {} },
+    semester: { label: '학기중(평일)', items: {} },
+    vacation: { label: '방학', items: {} },
+    exam: { label: '시험기간', items: {} },
   };
 }
 
@@ -132,6 +172,11 @@ export function defaultAppSettings(): AppSettings {
     activePreset: 'semester',
     presets: emptyRoutines(),
     timeUsage: [],
+    boxCount: 3,
+    tierDifficulty: 5,
+    burstAutoFrom: null,
+    profileEmoji: {},
+    settlements: {},
   };
 }
 
@@ -143,30 +188,101 @@ function isIsoLike(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 10 && !Number.isNaN(Date.parse(value));
 }
 
-function toPresetItems(value: unknown): TaskPreset[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const preset = item as Partial<TaskPreset>;
-    if (typeof preset.title !== 'string' || !preset.title.trim()) return [];
-    return [{ title: preset.title.trim().slice(0, 60), subject: typeof preset.subject === 'string' ? preset.subject : 'etc' }];
-  });
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+
+function routineKey(item: { title: string; subject: string }): string {
+  return `${item.title.trim()}::${item.subject}`;
 }
 
-function toRoutines(value: unknown): MemberRoutines {
-  if (!value || typeof value !== 'object') return {};
-  const result: MemberRoutines = {};
-  for (const [memberId, weekdays] of Object.entries(value as Record<string, unknown>)) {
-    if (!weekdays || typeof weekdays !== 'object') continue;
-    const byDay: WeekdayRoutine = {};
-    for (const [weekday, items] of Object.entries(weekdays as Record<string, unknown>)) {
-      if (!/^[0-6]$/.test(weekday)) continue;
-      const list = toPresetItems(items);
-      if (list.length > 0) byDay[weekday] = list;
+/** 여러 목록을 합칩니다 — 같은 공부면 적용 요일을 합치고, 부모 확인 표시는 켜진 쪽을 따릅니다. */
+export function mergeRoutineItems(base: RoutineItem[], extra: RoutineItem[]): RoutineItem[] {
+  const out = base.map((item) => ({ ...item, days: [...item.days] }));
+  const index = new Map(out.map((item) => [routineKey(item), item] as const));
+  for (const item of extra) {
+    const found = index.get(routineKey(item));
+    if (found) {
+      found.days = Array.from(new Set([...found.days, ...item.days])).sort((a, b) => a - b);
+      if (item.needParent) found.needParent = true;
+      continue;
     }
-    if (Object.keys(byDay).length > 0) result[memberId] = byDay;
+    const copy: RoutineItem = { ...item, days: [...item.days], order: out.length };
+    index.set(routineKey(copy), copy);
+    out.push(copy);
   }
-  return result;
+  return out.map((item, order) => ({ ...item, order }));
+}
+
+function newRoutineId(): string {
+  return `ri_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** 저장된 목록(새 모양 items 또는 예전 요일별 routines)을 항목 목록으로 읽습니다. */
+function toRoutineItems(value: unknown): RoutineItem[] {
+  const out: RoutineItem[] = [];
+  const seen = new Map<string, RoutineItem>();
+
+  const push = (raw: Partial<RoutineItem> & { title?: unknown; subject?: unknown }, days: number[]) => {
+    const title = typeof raw.title === 'string' ? raw.title.trim().slice(0, 60) : '';
+    if (!title) return;
+    const subject = typeof raw.subject === 'string' && raw.subject ? raw.subject : 'etc';
+    const key = `${title}::${subject}`;
+    const found = seen.get(key);
+    const safeDays = days.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6);
+    if (found) {
+      found.days = Array.from(new Set([...found.days, ...safeDays])).sort((a, b) => a - b);
+      if (raw.needParent === true) found.needParent = true;
+      return;
+    }
+    const item: RoutineItem = {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : newRoutineId(),
+      title,
+      subject,
+      days: Array.from(new Set(safeDays)).sort((a, b) => a - b),
+      order: out.length,
+    };
+    if (raw.needParent === true) item.needParent = true;
+    seen.set(key, item);
+    out.push(item);
+  };
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object') continue;
+      const raw = entry as Partial<RoutineItem>;
+      const days = Array.isArray(raw.days)
+        ? raw.days.filter((day): day is number => typeof day === 'number' && day >= 0 && day <= 6)
+        : [];
+      push(raw, days.length > 0 ? days : ALL_DAYS);
+    }
+    return out
+      .map((item) => item)
+      .sort((a, b) => a.order - b.order)
+      .map((item, order) => ({ ...item, order }));
+  }
+
+  // 예전 모양: { '0': [...], '1': [...], ... } — 나온 요일을 적용 요일로 삼킵니다.
+  if (value && typeof value === 'object') {
+    const raw: RoutineItem[] = [];
+    for (const day of [1, 2, 3, 4, 5, 6, 0]) {
+      const list = (value as Record<string, unknown>)[String(day)];
+      if (!Array.isArray(list)) continue;
+      for (const entry of list) {
+        if (!entry || typeof entry !== 'object') continue;
+        const item = entry as Partial<TaskPreset>;
+        if (typeof item.title !== 'string') continue;
+        raw.push({
+          id: newRoutineId(),
+          title: item.title,
+          subject: typeof item.subject === 'string' ? item.subject : 'etc',
+          days: [day],
+          order: raw.length,
+        });
+      }
+    }
+    for (const item of raw) push(item, item.days);
+  }
+
+  return out.map((item, order) => ({ ...item, order }));
 }
 
 /** 어떤 값이 와도 화면이 쓸 수 있는 설정으로 맞춥니다(예전 값·깨진 값도 안전). */
@@ -212,10 +328,23 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     for (const preset of ROUTINE_PRESETS) {
       const entry = (raw.presets as Record<string, unknown>)[preset.key];
       if (!entry || typeof entry !== 'object') continue;
-      presets[preset.key] = {
-        label: preset.label,
-        routines: toRoutines((entry as { routines?: unknown }).routines),
-      };
+      const value = entry as { items?: unknown; routines?: unknown };
+      const items: Record<string, RoutineItem[]> = {};
+      // 새 모양(items)을 먼저 읽고, 예전 모양(routines)이 있으면 합칩니다.
+      if (value.items && typeof value.items === 'object') {
+        for (const [memberId, list] of Object.entries(value.items as Record<string, unknown>)) {
+          const parsed = toRoutineItems(list);
+          if (parsed.length > 0) items[memberId] = parsed;
+        }
+      }
+      if (value.routines && typeof value.routines === 'object') {
+        for (const [memberId, weekdays] of Object.entries(value.routines as Record<string, unknown>)) {
+          const parsed = toRoutineItems(weekdays);
+          if (parsed.length === 0) continue;
+          items[memberId] = mergeRoutineItems(items[memberId] ?? [], parsed);
+        }
+      }
+      presets[preset.key] = { label: preset.label, items };
     }
   }
 
@@ -265,6 +394,50 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     ? Math.max(1, Math.min(28, Math.round(raw.burstAutoDays)))
     : 7;
 
+  const boxCount = typeof raw.boxCount === 'number' && Number.isFinite(raw.boxCount)
+    ? Math.max(1, Math.min(5, Math.round(raw.boxCount)))
+    : 3;
+
+  const difficulty = typeof raw.tierDifficulty === 'number' && Number.isFinite(raw.tierDifficulty)
+    ? Math.max(-10, Math.min(20, Math.round(raw.tierDifficulty)))
+    : 5;
+
+  const profileEmoji: Record<string, string> = {};
+  if (raw.profileEmoji && typeof raw.profileEmoji === 'object') {
+    for (const [memberId, emoji] of Object.entries(raw.profileEmoji as Record<string, unknown>)) {
+      if (typeof emoji === 'string' && emoji.trim() && emoji.length <= 8) profileEmoji[memberId] = emoji;
+    }
+  }
+
+  const settlements: Record<string, Record<string, Settlement>> = {};
+  if (raw.settlements && typeof raw.settlements === 'object') {
+    for (const [memberId, months] of Object.entries(raw.settlements as Record<string, unknown>)) {
+      if (!months || typeof months !== 'object') continue;
+      const kept: Record<string, Settlement> = {};
+      for (const [season, entry] of Object.entries(months as Record<string, unknown>)) {
+        if (!/^\d{4}-\d{2}$/.test(season) || !entry || typeof entry !== 'object') continue;
+        const value = entry as Partial<Settlement>;
+        if (typeof value.xp !== 'number' || !Number.isFinite(value.xp)) continue;
+        if (typeof value.title !== 'string' || typeof value.tier !== 'string') continue;
+        kept[season] = {
+          season,
+          xp: Math.max(0, Math.round(value.xp * 10) / 10),
+          title: value.title,
+          tier: value.tier,
+          division: typeof value.division === 'number' ? value.division : 0,
+          level: typeof value.level === 'number' ? value.level : 0,
+          frozen_at: isIsoLike(value.frozen_at) ? value.frozen_at : new Date().toISOString(),
+        };
+      }
+      if (Object.keys(kept).length > 0) settlements[memberId] = kept;
+    }
+  }
+
+  const rawAutoFrom = typeof raw.burstAutoFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.burstAutoFrom)
+    ? raw.burstAutoFrom
+    : null;
+  const burstAutoFrom = rawAutoFrom ?? (raw.burstAuto === true ? koreaISODateOf(new Date().toISOString()) : null);
+
   return {
     version: 1,
     burst,
@@ -284,6 +457,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
     activePreset,
     presets,
     timeUsage: timeUsage.slice(-200),
+    boxCount,
+    tierDifficulty: difficulty,
+    // 자동 버스트 타임은 켠 날부터만 적용합니다 — 날짜가 없던 예전 값은 오늘부터로 잡습니다.
+    burstAutoFrom,
+    profileEmoji,
+    settlements,
   };
 }
 
@@ -315,37 +494,50 @@ export function saveLocalAppSettings(settings: AppSettings): void {
 /* 조회 도우미                                                         */
 /* ------------------------------------------------------------------ */
 
-/** 지금 쓰는 프리셋의 한 아이 요일별 목록 */
-export function routinesForMember(settings: AppSettings, memberId: string): WeekdayRoutine {
-  return settings.presets[settings.activePreset]?.routines[memberId] ?? {};
+/** 그 프리셋의 한 아이 기본 항목 목록 (저장된 순서대로) */
+export function itemsForMember(
+  settings: AppSettings,
+  memberId: string,
+  presetKey: RoutineKey = settings.activePreset,
+): RoutineItem[] {
+  const list = settings.presets[presetKey]?.items[memberId] ?? [];
+  return [...list].sort((a, b) => a.order - b.order);
 }
 
-/** 한 아이·한 요일의 기본 목록 */
-export function routineForDay(settings: AppSettings, memberId: string, weekday: number): TaskPreset[] {
-  return routinesForMember(settings, memberId)[String(weekday)] ?? [];
-}
-
-/** 목록을 바꾼 새 설정을 돌려줍니다(저장은 호출하는 쪽에서). */
-export function withRoutine(
+/** 한 아이·한 요일에 실제로 넣을 기본 목록 — 적용 요일이 맞는 항목만 순서대로 */
+export function itemsForDay(
   settings: AppSettings,
   memberId: string,
   weekday: number,
-  items: TaskPreset[],
-): AppSettings {
-  const presetKey = settings.activePreset;
-  const preset = settings.presets[presetKey] ?? { label: presetKey, routines: {} };
-  const byDay = { ...(preset.routines[memberId] ?? {}) };
-  const cleaned = toPresetItems(items);
-  if (cleaned.length > 0) byDay[String(weekday)] = cleaned;
-  else delete byDay[String(weekday)];
+  presetKey: RoutineKey = settings.activePreset,
+): RoutineItem[] {
+  return itemsForMember(settings, memberId, presetKey).filter((item) => item.days.includes(weekday));
+}
 
-  const routines = { ...preset.routines };
-  if (Object.keys(byDay).length > 0) routines[memberId] = byDay;
-  else delete routines[memberId];
+/** 프리셋의 한 아이 목록을 통째로 바꾼 새 설정을 돌려줍니다(저장은 호출하는 쪽에서). */
+export function withRoutineItems(
+  settings: AppSettings,
+  memberId: string,
+  items: RoutineItem[],
+  presetKey: RoutineKey = settings.activePreset,
+): AppSettings {
+  const preset = settings.presets[presetKey] ?? { label: presetKey, items: {} };
+  const cleaned = items
+    .map((item, order) => ({
+      ...item,
+      title: item.title.trim().slice(0, 60),
+      days: Array.from(new Set(item.days.filter((day) => day >= 0 && day <= 6))).sort((a, b) => a - b),
+      order,
+    }))
+    .filter((item) => item.title.length > 0);
+
+  const nextItems = { ...preset.items };
+  if (cleaned.length > 0) nextItems[memberId] = cleaned;
+  else delete nextItems[memberId];
 
   return {
     ...settings,
-    presets: { ...settings.presets, [presetKey]: { label: preset.label, routines } },
+    presets: { ...settings.presets, [presetKey]: { label: preset.label, items: nextItems } },
   };
 }
 
@@ -369,9 +561,9 @@ export function toggleBurst(settings: AppSettings, on: boolean, now: Date = new 
 /** 그 날(한국 날짜)이 버스트 타임 안인지 — 수동(켜 둔 시간대) 또는 자동(월말) 중 하나면 켜집니다. */
 export function burstOnDate(
   iso: string,
-  settings: Pick<AppSettings, 'burstWindows' | 'burstAuto' | 'burstAutoDays'>,
+  settings: Pick<AppSettings, 'burstWindows' | 'burstAuto' | 'burstAutoDays'> & { burstAutoFrom?: string | null },
 ): boolean {
-  if (settings.burstAuto && autoBurstOn(iso, settings.burstAutoDays)) return true;
+  if (settings.burstAuto && autoBurstOn(iso, settings.burstAutoDays, settings.burstAutoFrom ?? null)) return true;
   return settings.burstWindows.some((window) => {
     const from = koreaDateOf(window.from);
     if (!from || from > iso) return false;
@@ -394,8 +586,10 @@ export function daysUntilMonthEnd(iso: string): number {
   return Math.max(0, last - day);
 }
 
-/** 🔥 자동 버스트 타임 — 월말까지 남은 일수가 days 보다 작으면 그 날은 켜집니다(7 → 마지막 7일). */
-export function autoBurstOn(iso: string, days: number): boolean {
+/** 🔥 자동 버스트 타임 — 켠 날(from)부터, 월말까지 남은 일수가 days 보다 작으면 그 날은 켜집니다. */
+export function autoBurstOn(iso: string, days: number, from: string | null = null): boolean {
+  // 켜기 전 날짜에는 소급 적용하지 않습니다.
+  if (from && iso < from) return false;
   return daysUntilMonthEnd(iso) < Math.max(1, Math.round(days));
 }
 
@@ -406,7 +600,7 @@ export function autoBurstOn(iso: string, days: number): boolean {
 export function burstMultiplierAt(
   iso: string | null | undefined,
   windows: BurstWindow[],
-  options: { autoDays?: number; overlap?: boolean } = {},
+  options: { autoDays?: number; overlap?: boolean; autoFrom?: string | null } = {},
 ): number {
   if (!iso) return 1;
   const time = Date.parse(iso);
@@ -426,7 +620,8 @@ export function burstMultiplierAt(
 
   const autoDays = options.autoDays ?? 0;
   const isoDate = koreaISODateOf(new Date(time).toISOString());
-  const auto = autoDays > 0 && isoDate !== null && autoBurstOn(isoDate, autoDays);
+  const auto =
+    autoDays > 0 && isoDate !== null && autoBurstOn(isoDate, autoDays, options.autoFrom ?? null);
 
   if (manual && auto) return options.overlap ? 4 : 2;
   return manual || auto ? 2 : 1;
@@ -434,11 +629,13 @@ export function burstMultiplierAt(
 
 /** 지금(오늘) 버스트 타임이 켜져 있는지 — 화면 배너에 씁니다. */
 export function burstActiveToday(
-  settings: Pick<AppSettings, 'burstWindows' | 'burstAuto' | 'burstAutoDays'>,
+  settings: Pick<AppSettings, 'burstWindows' | 'burstAuto' | 'burstAutoDays'> & { burstAutoFrom?: string | null },
   todayIso: string,
 ): boolean {
   // 자동은 날짜로 정해지고, 수동은 '지금 켜져 있는지(burst)' 로 봅니다.
-  if (settings.burstAuto && autoBurstOn(todayIso, settings.burstAutoDays)) return true;
+  if (settings.burstAuto && autoBurstOn(todayIso, settings.burstAutoDays, settings.burstAutoFrom ?? null)) {
+    return true;
+  }
   return settings.burstWindows.some((window) => window.to === null);
 }
 

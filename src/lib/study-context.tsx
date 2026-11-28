@@ -4,7 +4,6 @@ import {
   PermissionError,
   addTask as addTaskPure,
   changeTaskStatus,
-  childrenOf,
   createDemoDB,
   createInitialDB,
   deleteTask as deleteTaskPure,
@@ -12,7 +11,6 @@ import {
   familyOf,
   loadCloudCache,
   loadCurrentMemberId,
-  parentsOf,
   renameMember as renameMemberPure,
   saveCloudCache,
   saveCurrentMemberId,
@@ -60,11 +58,15 @@ import {
 import { unusedBonusMinutes } from './report';
 import { isShopTask, pointPrizeEventIds, prizeTaskInput } from './shop';
 import {
+  completionDateOf,
   computePastSeason,
   computeSeasonStats,
   isXpHiddenTask,
   previousSeason,
+  recentSeasons,
   seasonOf,
+  settlementOf,
+  type MonthSettlement,
   type SeasonStats,
   type TierLevel,
   type XpRules,
@@ -144,6 +146,10 @@ export interface StudyContextValue {
   postJjokkoNote: (content: string, dateIso: string, id: string) => Promise<ActionResult>;
   /** ⚙️ 부모 옵션 — 기본 공부 목록 · 🔥 버스트 타임 · ⑤ 연속 보너스 · 타이머 기록 */
   appSettings: AppSettings;
+  /** 🖼 아이 프로필 아이콘 바꾸기 — 부모(PIN) 만 */
+  setMemberEmoji: (memberId: string, emoji: string) => Promise<ActionResult>;
+  /** 📅 최근 12개월 월말 결산 최종 티어 (지난달부터) */
+  monthlySettlementsFor: (memberId: string) => MonthSettlement[];
   /** 'cloud' = 가족 폰이 함께 씀 / 'local' = 이 기기에만(SQL 실행 전) */
   settingsSync: 'cloud' | 'local';
   saveAppSettings: (patch: Partial<AppSettings>) => Promise<ActionResult & { localOnly?: boolean }>;
@@ -596,8 +602,19 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       // 자동 버스트 타임이 꺼져 있으면 0 — '자동 없음'으로 셈합니다.
       burstAutoDays: appSettings.burstAuto ? appSettings.burstAutoDays : 0,
       burstOverlap: appSettings.burstOverlap,
+      // 켠 날 이전 기록에는 소급 적용하지 않습니다.
+      burstAutoFrom: appSettings.burstAutoFrom,
+      tierDifficulty: appSettings.tierDifficulty,
     }),
-    [appSettings.burstWindows, appSettings.streakBonuses, appSettings.burstAuto, appSettings.burstAutoDays, appSettings.burstOverlap],
+    [
+      appSettings.burstWindows,
+      appSettings.streakBonuses,
+      appSettings.burstAuto,
+      appSettings.burstAutoDays,
+      appSettings.burstOverlap,
+      appSettings.burstAutoFrom,
+      appSettings.tierDifficulty,
+    ],
   );
 
   const applyTierEvents = useCallback(
@@ -1430,7 +1447,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
         (task) => task.member_id === child.id && task.due_date === today && !isXpHiddenTask(task),
       );
       if (todayTasks.length === 0) continue;
-      if (!todayTasks.every((task) => task.status === 'verified')) continue;
+      // ② 그 날 실제로 체크한 항목만 100% 로 칩니다(다른 날 체크한 이월분은 제외).
+      if (!todayTasks.every((task) => task.status === 'verified' && completionDateOf(task).date === today)) continue;
 
       const id = `n_${today}_congrats_${child.id}`;
       if (congratsRef.current.has(id) || notesRef.current.some((note) => note.id === id)) continue;
@@ -1439,7 +1457,64 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     }
   }, [db, notesState, syncState, cloud, postJjokkoNote]);
 
-  const currentMember = db.members.find((member) => member.id === currentMemberId) ?? db.members[0];
+  /** 🖼 아이가 고른 프로필 아이콘(⚙️ 옵션에 저장)을 모든 화면에 반영합니다. */
+  const displayMembers = useMemo(
+    () =>
+      db.members.map((member) =>
+        appSettings.profileEmoji[member.id]
+          ? { ...member, emoji: appSettings.profileEmoji[member.id] }
+          : member,
+      ),
+    [db.members, appSettings.profileEmoji],
+  );
+
+  /** 🖼 프로필 아이콘 바꾸기 — 부모(PIN) 만. */
+  const setMemberEmoji = useCallback(
+    async (memberId: string, emoji: string): Promise<ActionResult> => {
+      const clean = emoji.trim().slice(0, 8);
+      if (!clean) return { ok: false, error: '아이콘을 골라 주세요.' };
+      if (!dbRef.current.members.some((member) => member.id === memberId)) {
+        return { ok: false, error: '구성원을 찾지 못했어요.' };
+      }
+      const result = await saveAppSettings({
+        profileEmoji: { ...appSettingsRef.current.profileEmoji, [memberId]: clean },
+      });
+      return result.ok ? { ok: true } : { ok: false, error: result.error };
+    },
+    [saveAppSettings],
+  );
+
+  /** 📅 최근 12개월 월말 결산 — 이미 남긴 결산(난이도 바꿀 때 고정)이 있으면 그것을 그대로 보여 줍니다. */
+  const monthlySettlements = useMemo(() => {
+    const map: Record<string, MonthSettlement[]> = {};
+    const today = koreaTodayISO();
+    const seasons = recentSeasons(today);
+    for (const member of db.members) {
+      if (member.role !== 'child') continue;
+      const frozen = appSettings.settlements[member.id] ?? {};
+      map[member.id] = seasons.map((season) => {
+        const saved = frozen[season];
+        return settlementOf(
+          db.tasks,
+          member.id,
+          season,
+          today,
+          xpRules,
+          saved
+            ? { xp: saved.xp, title: saved.title, tier: saved.tier, division: saved.division, level: saved.level }
+            : null,
+        );
+      });
+    }
+    return map;
+  }, [db.tasks, db.members, appSettings.settlements, xpRules]);
+
+  const monthlySettlementsFor = useCallback(
+    (memberId: string) => monthlySettlements[memberId] ?? [],
+    [monthlySettlements],
+  );
+
+  const currentMember = displayMembers.find((member) => member.id === currentMemberId) ?? displayMembers[0];
 
   /** 아직 확인하지 않은 새 한마디 — 다른 사람이 남긴 것만 알립니다. */
   const unseenNotes = useMemo(() => {
@@ -1467,9 +1542,9 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     return {
       db,
       familyName: family?.name ?? '우리 가족 공부방',
-      members: db.members,
-      parents: parentsOf(db, currentMember.family_id),
-      children: childrenOf(db, currentMember.family_id),
+      members: displayMembers,
+      parents: displayMembers.filter((member) => member.family_id === currentMember.family_id && member.role === 'parent'),
+      children: displayMembers.filter((member) => member.family_id === currentMember.family_id && member.role === 'child'),
       currentMember,
       isParent: currentMember.role === 'parent',
       storageKind: mode,
@@ -1493,6 +1568,8 @@ export function StudyProvider({ children }: { children: ReactNode }) {
       useReward,
       saveRewardSettings,
       appSettings,
+      setMemberEmoji,
+      monthlySettlementsFor,
       settingsSync,
       saveAppSettings,
       consumeBonusTime,
@@ -1544,6 +1621,9 @@ export function StudyProvider({ children }: { children: ReactNode }) {
     xpRules,
     sessionPin,
     localPinReady,
+    setMemberEmoji,
+    monthlySettlementsFor,
+    displayMembers,
     unlockParent,
     setParentPin,
     lockParent,

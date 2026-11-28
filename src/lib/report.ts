@@ -1,5 +1,5 @@
 import { addDays, fromISODate, koreaTodayISO, toISODate, WEEKDAY_LABELS } from './date';
-import { DIVISIONS, formatXp, isStreakDay, isXpHiddenTask, type TierKey } from './season';
+import { DIVISIONS, completionDateOf, formatXp, isStreakDay, isXpHiddenTask, type TierKey } from './season';
 import type { TierEvent } from './rewards';
 import type { Task } from './types';
 
@@ -77,14 +77,21 @@ export interface Period {
   kindLabel: string;
 }
 
-function dayCounts(tasks: Task[], memberId: string): Map<string, { total: number; verified: number }> {
-  const map = new Map<string, { total: number; verified: number }>();
+function dayCounts(
+  tasks: Task[],
+  memberId: string,
+): Map<string, { total: number; verified: number; onTime: number }> {
+  const map = new Map<string, { total: number; verified: number; onTime: number }>();
   for (const task of tasks) {
     if (task.member_id !== memberId) continue;
     if (isHiddenTask(task)) continue;
-    const slot = map.get(task.due_date) ?? { total: 0, verified: 0 };
+    const slot = map.get(task.due_date) ?? { total: 0, verified: 0, onTime: 0 };
     slot.total += 1;
-    if (task.status === 'verified') slot.verified += 1;
+    if (task.status === 'verified') {
+      slot.verified += 1;
+      // 그 날 실제로 체크한 항목만 100% 에 셉니다 (이월·지연 체크 제외).
+      if (completionDateOf(task).date === task.due_date) slot.onTime += 1;
+    }
     map.set(task.due_date, slot);
   }
   return map;
@@ -112,7 +119,7 @@ export function streakThrough(
     const slot = counts.get(iso);
     if (!isStreakDay(iso)) continue;
     if (!slot || slot.total === 0) continue;
-    if (slot.verified === slot.total) {
+    if (slot.onTime === slot.total) {
       streak += 1;
       continue;
     }
@@ -143,8 +150,8 @@ export function computeMemberReport(
   const end = fromISODate(period.end);
   for (let cursor = start; cursor <= end; cursor = addDays(cursor, 1)) {
     const iso = toISODate(cursor);
-    const slot = counts.get(iso) ?? { total: 0, verified: 0 };
-    const allClear = slot.total > 0 && slot.verified === slot.total;
+    const slot = counts.get(iso) ?? { total: 0, verified: 0, onTime: 0 };
+    const allClear = slot.total > 0 && slot.onTime === slot.total;
     total += slot.total;
     verified += slot.verified;
     if (allClear) allClearDays += 1;

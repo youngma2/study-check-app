@@ -11,8 +11,10 @@ import { OptionsPage } from './components/OptionsPage';
 import { ShopPage } from './components/ShopPage';
 import { TimerPanel } from './components/TimerPanel';
 import { ProfileSheet } from './components/ProfileSheet';
+import { InventoryPage } from './components/InventoryPage';
+import { TierFooter } from './components/TierFooter';
 import { WeekStrip, type DayProgress } from './components/WeekStrip';
-import { CopyIcon, LockIcon, PlusIcon, XIcon } from './components/icons';
+import { LockIcon, PlusIcon, XIcon } from './components/icons';
 import { closeTopOverlay, useOverlayBack } from './lib/back-guard';
 import { streakBonusXp } from './lib/app-settings';
 import { playNoteChime } from './lib/chime';
@@ -129,6 +131,8 @@ export default function App() {
   const [optionsOpen, setOptionsOpen] = useState(false);
   /** 🛒 포인트 상점 */
   const [shopOpen, setShopOpen] = useState(false);
+  /** 🎒 인벤토리(보관함) */
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   /** ⏱ 부모 전용 시간 타이머 */
   const [timerOpen, setTimerOpen] = useState(false);
   /** 📱 뒤로가기로 앱을 닫으려 할 때 띄우는 확인 */
@@ -238,6 +242,7 @@ export default function App() {
   useOverlayBack(copySources !== null, () => setCopySources(null));
   useOverlayBack(dashboardOpen, () => setDashboardOpen(false));
   useOverlayBack(shopOpen, () => setShopOpen(false));
+  useOverlayBack(inventoryOpen, () => setInventoryOpen(false));
   useOverlayBack(exitOpen, () => setExitOpen(false));
 
   const latestUnseen = unseenNotes[0] ?? null;
@@ -519,18 +524,32 @@ export default function App() {
     );
   };
 
+  /** ✅ 부모 확인이 필요한 항목 — 아이는 확인 요청만 */
+  const handleRequestCheck = async (task: Task) => {
+    const result = await setStatus(task.id, 'pending_verification');
+    notify(
+      result.ok
+        ? '부모님께 확인 요청했어요 · 확인되면 완료되고 XP 가 들어가요'
+        : result.error ?? '확인 요청을 보내지 못했어요',
+    );
+  };
+
+  /** ✅ 부모 화면 — 확인 요청을 승인해 완료·XP 로 바꿉니다. */
+  const handleApprove = async (task: Task) => {
+    const completedAt = new Date().toISOString();
+    const change = xpChangeForStatus(study.db.tasks, task, 'verified', { completedAt, rules: study.xpRules });
+    const result = await setStatus(task.id, 'verified');
+    notify(
+      result.ok
+        ? `확인 완료! +${formatXp(Math.max(0, change.itemDelta))} XP`
+        : result.error ?? '확인하지 못했어요',
+    );
+  };
+
   const handleDelete = async (task: Task) => {
     if (!window.confirm(`'${task.title}' 항목을 삭제할까요?`)) return;
     const result = await removeTask(task.id);
     notify(result.ok ? '삭제했어요' : result.error ?? '삭제하지 못했어요');
-  };
-
-  const openCopyForDay = () => {
-    if (dayTasks.length === 0) {
-      notify('이 날은 복사할 공부가 없어요');
-      return;
-    }
-    setCopySources(dayTasks);
   };
 
   const openCopyForTask = (task: Task) => setCopySources([task]);
@@ -737,7 +756,7 @@ export default function App() {
 
         {/* ⚙️ 엄마·아빠 전용 도구 — 시간 타이머 · 옵션 · 포인트 상점 */}
         {isParent ? (
-          <div className="mt-2.5 grid grid-cols-3 gap-1.5">
+          <div className="mt-2.5 grid grid-cols-4 gap-1.5">
             <button
               type="button"
               data-testid="open-timer"
@@ -762,42 +781,53 @@ export default function App() {
               onClick={() => setShopOpen(true)}
               className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
             >
-              <span className="text-[11px] font-extrabold text-slate-800">🛒 포인트 상점</span>
+              <span className="text-[11px] font-extrabold text-slate-800">🛒 상점</span>
               <span className="text-[8.5px] font-bold text-slate-400">상품 · 구매 내역</span>
+            </button>
+            <button
+              type="button"
+              data-testid="open-inventory"
+              onClick={() => setInventoryOpen(true)}
+              className="flex flex-col items-start gap-0.5 rounded-2xl bg-white px-2 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.98]"
+            >
+              <span className="text-[11px] font-extrabold text-slate-800">🎒 보관함</span>
+              <span className="text-[8.5px] font-bold text-slate-400">P · 시간 · 상품</span>
             </button>
           </div>
         ) : null}
 
         {/* 🛒 아이 화면 — 내 포인트와 상점 */}
         {!isParent ? (
-          <button
-            type="button"
-            data-testid="open-shop-child"
-            onClick={() => setShopOpen(true)}
-            className="mt-2.5 flex w-full items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-2.5 text-left text-white shadow-lg shadow-emerald-500/25 transition active:scale-[0.99]"
-          >
-            <span aria-hidden className="text-[16px]">🛒</span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[11.5px] font-extrabold">포인트 상점</span>
-              <span className="block text-[9px] font-bold text-white/75">모은 P 로 물건을 사요</span>
-            </span>
-            <span data-testid="child-points-chip" className="shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-extrabold tabular-nums">
-              {pointsFor(study.db.tasks, currentMember.id)}P
-            </span>
-          </button>
+          <div className="mt-2.5 space-y-1.5">
+            <button
+              type="button"
+              data-testid="open-shop-child"
+              onClick={() => setShopOpen(true)}
+              className="flex w-full items-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-2.5 text-left text-white shadow-lg shadow-emerald-500/25 transition active:scale-[0.99]"
+            >
+              <span aria-hidden className="text-[16px]">🛒</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[11.5px] font-extrabold">포인트 상점</span>
+                <span className="block text-[9px] font-bold text-white/75">모은 P 로 물건을 사요</span>
+              </span>
+              <span data-testid="child-points-chip" className="shrink-0 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-extrabold tabular-nums">
+                {pointsFor(study.db.tasks, currentMember.id)}P
+              </span>
+            </button>
+            <button
+              type="button"
+              data-testid="open-inventory-child"
+              onClick={() => setInventoryOpen(true)}
+              className="flex w-full items-center gap-2 rounded-2xl bg-white px-3 py-2 text-left shadow-card ring-1 ring-slate-900/5 transition active:scale-[0.99]"
+            >
+              <span aria-hidden className="text-[15px]">🎒</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[11px] font-extrabold text-slate-800">내 보관함</span>
+                <span className="block text-[9px] font-bold text-slate-400">모은 P · 뽑은 시간 · 산 상품</span>
+              </span>
+            </button>
+          </div>
         ) : null}
-
-        <div className="mt-2.5 flex items-center gap-1.5">
-          <button
-            type="button"
-            data-testid="open-copy-day"
-            onClick={openCopyForDay}
-            className="flex w-full items-center justify-center gap-1.5 rounded-2xl bg-white py-2 text-[11px] font-extrabold text-slate-600 ring-1 ring-slate-900/5 transition active:scale-[0.98]"
-          >
-            <CopyIcon className="h-3.5 w-3.5 text-indigo-500" />
-            이 날 공부 복사
-          </button>
-        </div>
 
         <FamilyNotesBoard
           notes={notes}
@@ -862,6 +892,8 @@ export default function App() {
               onEdit={openEdit}
               onDelete={handleDelete}
               onCopy={openCopyForTask}
+              onRequestCheck={handleRequestCheck}
+              onApprove={handleApprove}
             />
           ))}
 
@@ -882,6 +914,8 @@ export default function App() {
                   onEdit={openEdit}
                   onDelete={handleDelete}
                   onCopy={openCopyForTask}
+                  onRequestCheck={handleRequestCheck}
+                  onApprove={handleApprove}
                 />
               ))}
             </div>
@@ -893,6 +927,9 @@ export default function App() {
             ? '완료를 누르면 그 시각이 기록돼요. 되돌리기·삭제는 부모 관리 PIN으로 잠겨 있어요.'
             : '완료를 누르면 그 시각이 바로 기록돼요. 삭제·되돌리기는 부모님만 할 수 있어요.'}
         </p>
+
+        {/* ⑨·⑩ 티어 범례 + 최근 12개월 월말 결산 (아이·부모 화면 맨 아래) */}
+        <TierFooter />
       </main>
 
       <div className="fixed inset-x-0 bottom-0 z-30">
@@ -944,6 +981,7 @@ export default function App() {
         onRequestParent={handleRequestParent}
         onLock={lockParent}
         onRename={renameMember}
+        onSetEmoji={study.setMemberEmoji}
         onResetDemo={async () => {
           const result = await resetDemo();
           notify(result.ok ? '샘플 데이터로 되돌렸어요' : result.error ?? '초기화하지 못했어요');
@@ -960,6 +998,7 @@ export default function App() {
       ) : null}
       {isParent && timerOpen ? <TimerPanel onClose={() => setTimerOpen(false)} onNotify={notify} /> : null}
       {shopOpen ? <ShopPage onClose={() => setShopOpen(false)} onNotify={notify} /> : null}
+      {inventoryOpen ? <InventoryPage onClose={() => setInventoryOpen(false)} onNotify={notify} /> : null}
 
       {/* 📱 뒤로가기 — 메인 화면에서만 「앱을 종료하시겠습니까?」 */}
       {exitOpen ? <ExitConfirmDialog onCancel={() => setExitOpen(false)} onConfirm={confirmExit} /> : null}

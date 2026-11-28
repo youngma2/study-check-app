@@ -80,6 +80,8 @@ export function DemoStudyProvider({
       useReward,
       saveRewardSettings: ok,
       appSettings: defaultAppSettings(),
+      setMemberEmoji: ok,
+      monthlySettlementsFor: () => [],
       settingsSync: 'local',
       saveAppSettings: async () => ({ ok: true, localOnly: true }),
       consumeBonusTime: async () => ({ ok: false, error: '체험 화면에서는 쓸 수 없어요.' }),

@@ -15,7 +15,8 @@
 
 import { fromISODate } from './date';
 import { isShopTask } from './shop';
-import type { Member, Task, TaskPreset } from './types';
+import type { RoutineItem } from './app-settings';
+import type { Member, Task } from './types';
 
 /** 요일 패턴에 따라 다시 넣지 않는 항목 (격주로 하는 것) — 제목에 이 말이 들어가면 건너뜁니다. */
 const BIWEEKLY_HINTS = ['상담'];
@@ -23,6 +24,8 @@ const BIWEEKLY_HINTS = ['상담'];
 export interface DefaultListItem {
   title: string;
   subject: string;
+  /** 부모(관리자) 확인이 필요한 항목인지 */
+  needParent?: boolean;
 }
 
 /** 그 날짜가 어떤 요일 묶음에 속하는지. 일요일은 빈 배열(쉬는 날). */
@@ -47,13 +50,15 @@ function isBiweekly(title: string): boolean {
  * (대상 날짜에 이미 있는 항목은 빼고 돌려줍니다)
  *
  * ⚙️ 옵션에서 그 아이·그 요일의 '기본 공부 목록'을 정해 두었으면 그것을 먼저 씁니다(④).
- *    정해 둔 목록이 없을 때만 지난 기록·빠른 추가 항목으로 넘어갑니다.
+ *    프리셋 항목은 적용 요일(days)과 순서(order)를 가집니다.
+ *    정해 둔 목록이 없고 예전처럼 지난 기록을 쓰도록 허용했을 때만 기록·빠른 추가 항목으로 넘어갑니다.
  */
 export function defaultItemsForDay(
   tasks: Task[],
   member: Member,
   targetIso: string,
-  routines?: Record<string, TaskPreset[]>,
+  routineItems?: RoutineItem[],
+  allowHistoryFallback = true,
 ): DefaultListItem[] {
   const pattern = patternDaysFor(targetIso);
   // 상점 장부(상품·포인트)는 공부 목록이 아니므로 처음부터 뺍니다.
@@ -63,12 +68,14 @@ export function defaultItemsForDay(
     mine.filter((task) => task.due_date === targetIso).map((task) => keyOf(task)),
   );
 
-  const routine = routines?.[String(fromISODate(targetIso).getDay())] ?? [];
-  if (routine.length > 0) {
-    return routine
-      .map((item) => ({ title: item.title, subject: item.subject }))
+  if (routineItems && routineItems.length > 0) {
+    return routineItems
+      .filter((item) => item.days.length === 0 || item.days.includes(fromISODate(targetIso).getDay()))
+      .sort((a, b) => a.order - b.order)
+      .map((item) => ({ title: item.title, subject: item.subject, ...(item.needParent ? { needParent: true } : {}) }))
       .filter((item) => !taken.has(keyOf(item)));
   }
+  if (!allowHistoryFallback) return [];
 
   const picked: DefaultListItem[] = [];
   const seen = new Set<string>();

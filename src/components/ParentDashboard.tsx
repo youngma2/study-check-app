@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { usedBonusMinutes } from '../lib/app-settings';
-import { pointPrizeEventIds } from '../lib/shop';
+import { pointEntriesFor, pointPrizeEventIds, pointsFor } from '../lib/shop';
 import { cx } from '../lib/cx';
 import { fromISODate, koreaTodayISO, WEEKDAY_LABELS } from '../lib/date';
 import { displayGrade } from '../lib/grade';
@@ -63,6 +63,14 @@ function useReports(period: Period) {
         ),
         tier: study.seasonStatsFor(member.id)?.level ?? null,
         xp: study.seasonStatsFor(member.id)?.xp ?? 0,
+        // ⑭ 학습 대시보드에도 포인트(P)를 빠짐없이 보여 줍니다.
+        points: pointsFor(study.db.tasks, member.id),
+        earned: pointEntriesFor(study.db.tasks, member.id)
+          .filter((entry) => entry.delta > 0)
+          .reduce((sum, entry) => sum + entry.delta, 0),
+        spent: pointEntriesFor(study.db.tasks, member.id)
+          .filter((entry) => entry.delta < 0)
+          .reduce((sum, entry) => sum - entry.delta, 0),
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [study.db.tasks, study.tierEvents, study.children, study.appSettings, period.start, period.end, today],
@@ -98,7 +106,7 @@ export function ParentWeekSummary({ onOpen }: { onOpen: () => void }) {
       </div>
 
       <div className="mt-2 space-y-1.5">
-        {rows.map(({ member, report, unusedAll }) => (
+        {rows.map(({ member, report, unusedAll, points }) => (
           <div key={member.id} data-testid={`summary-child-${member.id}`} className="flex items-center gap-2">
             <span className="w-10 shrink-0 truncate text-[10.5px] font-extrabold text-slate-700">
               {member.emoji} {member.name}
@@ -118,12 +126,19 @@ export function ParentWeekSummary({ onOpen }: { onOpen: () => void }) {
             >
               🔥{report.streak}일 · 🎁{unusedAll}분
             </span>
+            <span
+              data-testid={`summary-points-${member.id}`}
+              className="w-11 shrink-0 text-right text-[9px] font-extrabold tabular-nums text-emerald-600"
+              title={`보유 포인트 ${points}P`}
+            >
+              💰{points}P
+            </span>
           </div>
         ))}
       </div>
 
       <p className="mt-1.5 text-[8.5px] font-semibold text-slate-400">
-        주간 완료율 · 🔥 연속 100% · 🎁 남은 보너스 시간
+        주간 완료율 · 🔥 연속 100% · 🎁 남은 보너스 시간 · 💰 포인트(P)
       </p>
     </button>
   );
@@ -248,6 +263,9 @@ function ChildReportCard({
   tier,
   xp,
   unusedAll,
+  points,
+  earned,
+  spent,
 }: {
   member: Member;
   report: MemberReport;
@@ -256,6 +274,9 @@ function ChildReportCard({
   tier: TierLevel | null;
   xp: number;
   unusedAll: number;
+  points: number;
+  earned: number;
+  spent: number;
 }) {
   return (
     <section
@@ -311,6 +332,16 @@ function ChildReportCard({
           </p>
         </div>
       </div>
+
+      <p
+        data-testid={`dash-points-${member.id}`}
+        className="mt-1.5 flex items-center gap-1 rounded-xl bg-emerald-50 px-2 py-1.5 text-[9.5px] font-extrabold text-emerald-700 ring-1 ring-emerald-100"
+      >
+        💰 포인트 <span className="tabular-nums">{points}P</span>
+        <span className="ml-auto font-bold text-emerald-600/80">
+          적립 {earned}P · 사용 {spent}P
+        </span>
+      </p>
 
       <p data-testid={`dash-bonus-line-${member.id}`} className="mt-1.5 text-[9.5px] font-bold text-slate-500">
         🎁 이 기간 {rewardSummary(report)} <span className="text-slate-300">|</span> 전체 미사용 {unusedAll}분
@@ -480,7 +511,7 @@ export function ParentDashboard({ onClose }: { onClose: () => void }) {
       </div>
 
       <div className="mx-auto w-full max-w-md space-y-2.5 px-4 pb-28 pt-1">
-        {rows.map(({ member, report, tier, xp, unusedAll }) => (
+        {rows.map(({ member, report, tier, xp, unusedAll, points, earned, spent }) => (
           <ChildReportCard
             key={member.id}
             member={member}
@@ -490,6 +521,9 @@ export function ParentDashboard({ onClose }: { onClose: () => void }) {
             tier={tier}
             xp={xp}
             unusedAll={unusedAll}
+            points={points}
+            earned={earned}
+            spent={spent}
           />
         ))}
 

@@ -20,6 +20,8 @@ interface ChildBoardProps {
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
   onCopy: (task: Task) => void;
+  onRequestCheck: (task: Task) => void;
+  onApprove: (task: Task) => void;
 }
 
 export function ChildBoard({
@@ -34,6 +36,8 @@ export function ChildBoard({
   onEdit,
   onDelete,
   onCopy,
+  onRequestCheck,
+  onApprove,
 }: ChildBoardProps) {
   const theme = memberTheme(member.color);
   const summary = summarize(tasks);
@@ -117,6 +121,8 @@ export function ChildBoard({
               onEdit={onEdit}
               onDelete={onDelete}
               onCopy={onCopy}
+              onRequestCheck={onRequestCheck}
+              onApprove={onApprove}
             />
           ))}
         </ul>

@@ -22,6 +22,8 @@ interface ProfileSheetProps {
   onRequestParent: (memberId: string) => void;
   onLock: () => void;
   onRename: (memberId: string, name: string) => Promise<{ ok: boolean; error?: string }>;
+  /** 🖼 프로필 아이콘 바꾸기 (부모·PIN 만) */
+  onSetEmoji: (memberId: string, emoji: string) => Promise<{ ok: boolean; error?: string }>;
   onResetDemo: () => void | Promise<void>;
   canReset: boolean;
   storageKind: 'local' | 'supabase';
@@ -61,6 +63,14 @@ const REALTIME_TEXT: Record<RealtimeState, string> = {
   error: '실시간 연결 끊김 · 잠시 뒤 새로고침',
 };
 
+/** 🖼 아이가 고를 수 있는 예쁜 아이콘 — 동물·캐릭터·별/왕관·취미 */
+export const CHILD_ICONS = [
+  '🦊', '🐰', '🐻', '🐼', '🐨', '🐯', '🦁', '🐷', '🐸', '🐤', '🐶', '🐱',
+  '🦄', '🐙', '🐳', '🦋', '🐢', '🦉', '🐝', '🦈',
+  '👑', '⭐', '🌟', '✨', '💎', '🎀', '🌈', '🍀',
+  '⚽', '🏀', '🎨', '🎹', '🎮', '🚀', '📚', '🧩', '🎸', '🏊', '🚴', '🎯',
+] as const;
+
 export function ProfileSheet({
   open,
   onClose,
@@ -71,6 +81,7 @@ export function ProfileSheet({
   onRequestParent,
   onLock,
   onRename,
+  onSetEmoji,
   onResetDemo,
   canReset,
   storageKind,
@@ -85,6 +96,7 @@ export function ProfileSheet({
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [emojiDraft, setEmojiDraft] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -92,6 +104,7 @@ export function ProfileSheet({
     if (!open) {
       setEditingId(null);
       setDraft('');
+      setEmojiDraft('');
       setRenameError(null);
     }
   }, [open]);
@@ -99,19 +112,31 @@ export function ProfileSheet({
   const startRename = (member: Member) => {
     setEditingId(member.id);
     setDraft(member.name);
+    setEmojiDraft(member.emoji);
     setRenameError(null);
   };
 
   const submitRename = async () => {
     if (!editingId) return;
+    const target = members.find((member) => member.id === editingId);
     setSaving(true);
     setRenameError(null);
     const result = await onRename(editingId, draft);
-    setSaving(false);
     if (!result.ok) {
+      setSaving(false);
       setRenameError(result.error ?? '이름을 바꾸지 못했어요.');
       return;
     }
+    // ⑫ 아이 아이콘도 함께 저장
+    if (target && target.role === 'child' && emojiDraft && emojiDraft !== target.emoji) {
+      const emojiResult = await onSetEmoji(editingId, emojiDraft);
+      if (!emojiResult.ok) {
+        setSaving(false);
+        setRenameError(emojiResult.error ?? '아이콘을 바꾸지 못했어요.');
+        return;
+      }
+    }
+    setSaving(false);
     setEditingId(null);
   };
 
@@ -230,6 +255,28 @@ export function ProfileSheet({
               </button>
             </div>
             {renameError ? <p className="mt-1 px-1 text-[10.5px] font-bold text-rose-500">{renameError}</p> : null}
+            {members.find((member) => member.id === editingId)?.role === 'child' ? (
+              <div className="mt-1.5" data-testid="emoji-picker">
+                <p className="px-1 text-[9px] font-extrabold text-slate-400">프로필 아이콘</p>
+                <div className="no-scrollbar mt-1 flex max-h-[92px] flex-wrap gap-1 overflow-y-auto">
+                  {CHILD_ICONS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      data-testid={`emoji-${emoji}`}
+                      onClick={() => setEmojiDraft(emoji)}
+                      aria-pressed={emojiDraft === emoji}
+                      className={cx(
+                        'grid h-7 w-7 place-items-center rounded-lg text-[15px] ring-1 transition active:scale-90',
+                        emojiDraft === emoji ? 'bg-indigo-100 ring-indigo-300' : 'bg-white ring-slate-200',
+                      )}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
